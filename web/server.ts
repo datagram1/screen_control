@@ -16,6 +16,7 @@ import { agentRegistry } from './src/lib/control-server/agent-registry';
 import { streamSessionManager } from './src/lib/control-server/stream-session-manager';
 import { terminalSessionManager } from './src/lib/control-server/terminal-session-manager';
 import { startEmailAgent, stopEmailAgent } from './src/lib/email-agent';
+import { startJobScheduler, stopJobScheduler } from './src/lib/job-scheduler';
 import os from 'os';
 
 const dev = process.env.NODE_ENV !== 'production';
@@ -125,6 +126,7 @@ app.prepare().then(() => {
     agentRegistry.cleanup();
     streamSessionManager.cleanup();
     stopEmailAgent();
+    stopJobScheduler();
   });
 
   server.listen(port, hostname, async () => {
@@ -148,6 +150,12 @@ app.prepare().then(() => {
     const emailStarted = await startEmailAgent();
     if (emailStarted) {
       console.log('║  Email Agent: ACTIVE                                              ║');
+    }
+
+    // Start job scheduler
+    const schedulerStarted = await startJobScheduler();
+    if (schedulerStarted) {
+      console.log('║  Job Scheduler: ACTIVE                                            ║');
     }
   });
 });

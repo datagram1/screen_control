@@ -68,6 +68,9 @@ model User {
   // Rescue tokens for boot USB pairing
   rescueTokens            RescueToken[]
 
+  // Job scheduler
+  scheduledJobs           ScheduledJob[]
+
   @@map("users")
 }
 
@@ -1056,4 +1059,184 @@ enum EmailTaskStatus {
   COMPLETED       // Successfully completed
   FAILED          // Failed with error
   SKIPPED         // Skipped (e.g., spam, not actionable)
+}
+
+// ============================================
+// JOB SCHEDULER
+// ============================================
+
+model JobType {
+  id              String      @id @default(cuid())
+  name            String      @unique  // "docker_health", "disk_cleanup", etc.
+  displayName     String               // "Docker Health Check"
+  description     String?
+  category        JobCategory @default(CUSTOM)
+
+  // Default prompt/instructions for AI
+  defaultPrompt   String      @db.Text
+
+  // Default tasks checklist (JSON array of strings)
+  defaultTasks    Json?
+
+  // Whether this is a system-provided template
+  isSystem        Boolean     @default(false)
+
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  scheduledJobs   ScheduledJob[]
+
+  @@map("job_types")
+}
+
+model ScheduledJob {
+  id              String      @id @default(cuid())
+  userId          String
+  jobTypeId       String?
+
+  name            String
+  description     String?
+
+  // Schedule (cron format)
+  cronExpression  String               // "0 2 * * *" = daily 2am
+  timezone        String      @default("UTC")
+
+  // Target agents
+  targetAgentIds  String[]             // Which agents to run on
+  runParallel     Boolean     @default(true)
+
+  // Custom prompt (overrides/extends job type)
+  customPrompt    String?     @db.Text
+
+  // Notifications
+  notifyEmail     String?
+  notifyOn        NotifyCondition @default(ISSUES)
+
+  // Status
+  isEnabled       Boolean     @default(true)
+  nextRunAt       DateTime?
+  lastRunAt       DateTime?
+
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobType         JobType?    @relation(fields: [jobTypeId], references: [id], onDelete: SetNull)
+  runs            JobRun[]
+
+  @@index([userId])
+  @@index([isEnabled, nextRunAt])
+  @@map("scheduled_jobs")
+}
+
+model JobRun {
+  id              String        @id @default(cuid())
+  scheduledJobId  String
+
+  // Execution
+  status          JobRunStatus  @default(PENDING)
+  triggeredBy     JobTrigger    @default(SCHEDULE)
+
+  // Timing
+  startedAt       DateTime      @default(now())
+  completedAt     DateTime?
+
+  // Aggregate results
+  totalAgents     Int           @default(0)
+  successCount    Int           @default(0)
+  failureCount    Int           @default(0)
+  issuesFound     Int           @default(0)
+
+  // Relations
+  scheduledJob    ScheduledJob  @relation(fields: [scheduledJobId], references: [id], onDelete: Cascade)
+  results         JobRunResult[]
+
+  @@index([scheduledJobId])
+  @@index([startedAt])
+  @@map("job_runs")
+}
+
+model JobRunResult {
+  id              String          @id @default(cuid())
+  jobRunId        String
+  agentId         String
+
+  // Execution
+  status          JobResultStatus @default(PENDING)
+  startedAt       DateTime?
+  completedAt     DateTime?
+
+  // AI output
+  output          String?         @db.Text   // Full AI response
+  summary         String?                    // Brief summary
+  issuesFound     Json?                      // Array of issues
+  actionsTaken    Json?                      // Array of actions
+
+  // Error tracking
+  errorMessage    String?
+
+  // Relations
+  jobRun          JobRun          @relation(fields: [jobRunId], references: [id], onDelete: Cascade)
+
+  @@index([jobRunId])
+  @@index([agentId])
+  @@map("job_run_results")
+}
+
+enum JobCategory {
+  HEALTH          // Health checks
+  MAINTENANCE     // Regular maintenance
+  SECURITY        // Security scans
+  BACKUP          // Backup tasks
+  CUSTOM          // User-defined
+}
+
+enum NotifyCondition {
+  ALWAYS          // Always send notification
+  ISSUES          // Only when issues found
+  FAILURE         // Only on failures
+  NEVER           // Never notify
+}
+
+enum JobRunStatus {
+  PENDING         // Waiting to start
+  RUNNING         // In progress
+  COMPLETED       // Finished successfully
+  PARTIAL         // Some agents failed
+  FAILED          // All failed
+  CANCELLED       // Cancelled by user
+}
+
+enum JobResultStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  FAILED
+  SKIPPED         // Agent offline
+}
+
+enum JobTrigger {
+  SCHEDULE        // Cron triggered
+  MANUAL          // User triggered
+  ALERT           // Triggered by another system
+  EMAIL           // Triggered via email
+}
+
+// ============================================
+// TERMINAL SESSION TOKENS
+// ============================================
+
+model TerminalSessionToken {
+  id              String    @id @default(cuid())
+  token           String    @unique
+  agentId         String
+  userId          String
+  remoteAddress   String
+  expiresAt       DateTime
+  createdAt       DateTime  @default(now())
+
+  @@index([token])
+  @@index([expiresAt])
+  @@map("terminal_session_tokens")
 }
