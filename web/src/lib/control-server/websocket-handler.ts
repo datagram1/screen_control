@@ -219,6 +219,32 @@ export function handleAgentConnection(
 
   // Handle disconnect
   socket.on('close', async (code, reason) => {
+    const agentName = agent?.machineName || agent?.machineId || 'unknown';
+    const reasonStr = reason?.toString() || '';
+
+    // Log detailed close information
+    console.log(`[WS] Connection closed for ${agentName}: code=${code}, reason="${reasonStr}"`);
+
+    // Interpret close codes
+    let closeType = 'unknown';
+    switch (code) {
+      case 1000: closeType = 'normal'; break;
+      case 1001: closeType = 'going_away'; break;
+      case 1002: closeType = 'protocol_error'; break;
+      case 1003: closeType = 'unsupported_data'; break;
+      case 1005: closeType = 'no_status'; break;
+      case 1006: closeType = 'abnormal'; break;
+      case 1007: closeType = 'invalid_payload'; break;
+      case 1008: closeType = 'policy_violation'; break;
+      case 1009: closeType = 'message_too_big'; break;
+      case 1010: closeType = 'extension_required'; break;
+      case 1011: closeType = 'internal_error'; break;
+      case 1015: closeType = 'tls_handshake_fail'; break;
+      case 4000: closeType = 'registration_failed'; break;
+      case 4001: closeType = 'auth_failed'; break;
+    }
+    console.log(`[WS] Close type: ${closeType}`);
+
     if (agent) {
       // End any active streaming sessions for this agent
       streamSessionManager.handleAgentDisconnect(agent.id);
@@ -226,7 +252,6 @@ export function handleAgentConnection(
       terminalSessionManager.handleAgentDisconnect(agent.id);
       await registry.unregister(agent.id);
     }
-    console.log(`[WS] Connection closed: ${code} ${reason.toString()}`);
   });
 
   // Handle errors

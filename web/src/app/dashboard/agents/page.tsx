@@ -325,6 +325,7 @@ export default function AgentsPage() {
                 <th className="px-3 py-3 text-left text-sm font-medium text-slate-300">Last Seen</th>
                 <th className="px-3 py-3 text-left text-sm font-medium text-slate-300">IP</th>
                 <th className="px-3 py-3 text-left text-sm font-medium text-slate-300">Version</th>
+                <th className="px-3 py-3 text-center text-sm font-medium text-slate-300">Connect</th>
                 <th className="px-4 py-3 text-right text-sm font-medium text-slate-300">Actions</th>
               </tr>
             </thead>
@@ -372,19 +373,41 @@ export default function AgentsPage() {
                   <td className="px-3 py-3 text-slate-300 text-sm font-mono">
                     {agent.agentVersion || '-'}
                   </td>
+                  <td className="px-3 py-3 text-center">
+                    {agent.status === 'ONLINE' && agent.state === 'ACTIVE' ? (
+                      <div className="flex justify-center space-x-2">
+                        {/* Screen/GUI connection - only for machines with display */}
+                        {agent.hasDisplay !== false && (
+                          <Link
+                            href={`/dashboard/viewer/${agent.id}`}
+                            className="p-1.5 bg-slate-700 hover:bg-blue-600 text-slate-300 hover:text-white rounded transition-colors"
+                            title="Connect to screen (GUI)"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                              <line x1="8" y1="21" x2="16" y2="21"></line>
+                              <line x1="12" y1="17" x2="12" y2="21"></line>
+                            </svg>
+                          </Link>
+                        )}
+                        {/* Terminal connection - available for all machines */}
+                        <Link
+                          href={`/dashboard/terminal/${agent.id}`}
+                          className="p-1.5 bg-slate-700 hover:bg-green-600 text-slate-300 hover:text-white rounded transition-colors"
+                          title="Connect to terminal (CLI)"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="4 17 10 11 4 5"></polyline>
+                            <line x1="12" y1="19" x2="20" y2="19"></line>
+                          </svg>
+                        </Link>
+                      </div>
+                    ) : (
+                      <span className="text-slate-500 text-sm">-</span>
+                    )}
+                  </td>
                   <td className="px-3 py-3 text-right">
                     <div className="flex justify-end space-x-1.5 flex-nowrap">
-                      {/* Connect button for online + active agents */}
-                      {agent.status === 'ONLINE' && agent.state === 'ACTIVE' && (
-                        <Link
-                          href={agent.hasDisplay !== false ? `/dashboard/viewer/${agent.id}` : `/dashboard/terminal/${agent.id}`}
-                          className="px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 transition-colors whitespace-nowrap"
-                          title={agent.hasDisplay !== false ? "Connect to screen" : "Connect to terminal (headless)"}
-                        >
-                          Connect
-                        </Link>
-                      )}
-
                       {/* Activate button for PENDING agents */}
                       {agent.state === 'PENDING' && (
                         <button

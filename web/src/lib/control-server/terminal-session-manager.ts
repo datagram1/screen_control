@@ -10,6 +10,7 @@ import { WebSocket } from 'ws';
 import { v4 as uuidv4 } from 'uuid';
 import crypto from 'crypto';
 import { agentRegistry } from './agent-registry';
+import { prisma } from '@/lib/db';
 
 interface TerminalSession {
   id: string;
@@ -36,16 +37,16 @@ interface SessionToken {
 class TerminalSessionManager {
   private sessions = new Map<string, TerminalSession>();
   private sessionsByViewer = new Map<WebSocket, string>(); // viewer socket -> session id
-  private sessionTokens = new Map<string, SessionToken>();
 
   /**
    * Create a session token for a terminal connection
+   * Uses database storage so tokens work across API routes and WebSocket handlers
    */
-  createSessionToken(params: {
+  async createSessionToken(params: {
     agentId: string;
     userId: string;
     remoteAddress: string;
-  }): { token: string; expiresAt: Date } | { error: string } {
+  }): Promise<{ token: string; expiresAt: Date } | { error: string }> {
     // Check if agent is connected
     const connectedAgent = agentRegistry.getAgentByDbId(params.agentId);
     if (!connectedAgent) {
@@ -56,43 +57,49 @@ class TerminalSessionManager {
     const token = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minute expiry
 
-    this.sessionTokens.set(token, {
-      token,
-      agentId: params.agentId,
-      userId: params.userId,
-      remoteAddress: params.remoteAddress,
-      createdAt: new Date(),
-      expiresAt,
+    // Store token in database (works across processes)
+    await prisma.terminalSessionToken.create({
+      data: {
+        token,
+        agentId: params.agentId,
+        userId: params.userId,
+        remoteAddress: params.remoteAddress,
+        expiresAt,
+      },
     });
 
-    // Clean up expired tokens periodically
-    this.cleanupExpiredTokens();
+    // Clean up expired tokens periodically (async, don't wait)
+    this.cleanupExpiredTokens().catch(console.error);
 
     return { token, expiresAt };
   }
 
   /**
    * Validate session token and create terminal session
+   * Reads tokens from database so they work across processes
    */
   async createSession(
     viewerSocket: WebSocket,
     token: string,
     viewerAddress: string
   ): Promise<{ session: TerminalSession } | { error: string }> {
-    // Validate token
-    const tokenData = this.sessionTokens.get(token);
+    // Validate token from database
+    const tokenData = await prisma.terminalSessionToken.findUnique({
+      where: { token },
+    });
+
     if (!tokenData) {
       return { error: 'Invalid token' };
     }
 
     // Check expiry
     if (new Date() > tokenData.expiresAt) {
-      this.sessionTokens.delete(token);
+      await prisma.terminalSessionToken.delete({ where: { id: tokenData.id } });
       return { error: 'Token expired' };
     }
 
     // Remove used token (one-time use)
-    this.sessionTokens.delete(token);
+    await prisma.terminalSessionToken.delete({ where: { id: tokenData.id } });
 
     // Get agent connection
     const connectedAgent = agentRegistry.getAgentByDbId(tokenData.agentId);
@@ -250,7 +257,7 @@ class TerminalSessionManager {
     // Forward resize to agent
     try {
       await agentRegistry.sendCommand(session.agentConnectionId, 'terminal_resize', {
-        sessionId,
+        sessionId: session.agentSessionId,
         cols,
         rows,
       });
@@ -347,26 +354,31 @@ class TerminalSessionManager {
   /**
    * Get stats
    */
-  getStats(): {
+  async getStats(): Promise<{
     activeSessions: number;
     pendingTokens: number;
-  } {
+  }> {
+    const pendingTokens = await prisma.terminalSessionToken.count({
+      where: {
+        expiresAt: { gt: new Date() },
+      },
+    });
+
     return {
       activeSessions: this.sessions.size,
-      pendingTokens: this.sessionTokens.size,
+      pendingTokens,
     };
   }
 
   /**
-   * Clean up expired tokens
+   * Clean up expired tokens from database
    */
-  private cleanupExpiredTokens(): void {
-    const now = new Date();
-    for (const [token, data] of this.sessionTokens) {
-      if (now > data.expiresAt) {
-        this.sessionTokens.delete(token);
-      }
-    }
+  private async cleanupExpiredTokens(): Promise<void> {
+    await prisma.terminalSessionToken.deleteMany({
+      where: {
+        expiresAt: { lt: new Date() },
+      },
+    });
   }
 }
 

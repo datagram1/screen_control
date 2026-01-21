@@ -106,8 +106,8 @@ export async function POST(request: NextRequest) {
     headersList.get('x-real-ip') ||
     'unknown';
 
-  // Create session token
-  const result = terminalSessionManager.createSessionToken({
+  // Create session token (stored in database for cross-process access)
+  const result = await terminalSessionManager.createSessionToken({
     agentId: body.agentId,
     userId: user.id,
     remoteAddress,

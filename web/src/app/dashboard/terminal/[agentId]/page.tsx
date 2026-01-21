@@ -31,6 +31,13 @@ export default function TerminalPage({ params }: PageProps) {
   });
   const [agentInfo, setAgentInfo] = useState<{ hostname: string; osType: string } | null>(null);
   const [writeToTerminal, setWriteToTerminal] = useState<((data: string) => void) | null>(null);
+  const writeToTerminalRef = useRef<((data: string) => void) | null>(null);
+  const focusTerminalRef = useRef<(() => void) | null>(null);
+
+  // Keep ref in sync with state
+  useEffect(() => {
+    writeToTerminalRef.current = writeToTerminal;
+  }, [writeToTerminal]);
 
   // Request terminal session and connect
   const connect = useCallback(async () => {
@@ -100,16 +107,20 @@ export default function TerminalPage({ params }: PageProps) {
           status: 'connected',
           sessionId: msg.sessionId as string,
         });
-        // Write welcome message
-        if (writeToTerminal) {
-          writeToTerminal(`\r\n\x1b[32mConnected to ${agentInfo?.hostname || 'remote host'}\x1b[0m\r\n\r\n`);
+        // Write welcome message (use ref for current value)
+        if (writeToTerminalRef.current) {
+          writeToTerminalRef.current(`\r\n\x1b[32mConnected to ${agentInfo?.hostname || 'remote host'}\x1b[0m\r\n\r\n`);
+        }
+        // Focus terminal for Playwright/automated access
+        if (focusTerminalRef.current) {
+          focusTerminalRef.current();
         }
         break;
 
       case 'terminal_output':
-        // Output from the shell
-        if (writeToTerminal && typeof msg.data === 'string') {
-          writeToTerminal(msg.data);
+        // Output from the shell (use ref for current value)
+        if (writeToTerminalRef.current && typeof msg.data === 'string') {
+          writeToTerminalRef.current(msg.data);
         }
         break;
 
@@ -134,7 +145,7 @@ export default function TerminalPage({ params }: PageProps) {
         });
         break;
     }
-  }, [writeToTerminal, agentInfo]);
+  }, [agentInfo]); // Uses writeToTerminalRef which is stable
 
   // Disconnect
   const disconnect = useCallback(() => {
@@ -255,7 +266,12 @@ export default function TerminalPage({ params }: PageProps) {
 
         <XTermComponent
           onInput={handleTerminalInput}
-          onReady={(write) => setWriteToTerminal(() => write)}
+          onReady={(write, focus) => {
+            setWriteToTerminal(() => write);
+            focusTerminalRef.current = focus;
+            // Initial focus for Playwright
+            focus();
+          }}
         />
       </div>
     </div>

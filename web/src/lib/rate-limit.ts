@@ -152,11 +152,11 @@ export const RateLimiters = {
 
   /**
    * MCP endpoint - per-connection rate limit
-   * 100 requests per minute per connection
+   * 1000 requests per minute per connection (high limit for authenticated users)
    */
   mcpRequest: (connectionId: string) =>
     checkRateLimit(connectionId, 'mcp:request', {
-      limit: 100,
+      limit: 1000,
       windowSeconds: 60, // 1 minute
     }),
 

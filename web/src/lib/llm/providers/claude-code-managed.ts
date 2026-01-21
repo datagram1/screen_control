@@ -114,13 +114,16 @@ IMPORTANT: Complete this task autonomously. Make reasonable decisions without as
       // Claude Code requires a TTY for proper initialization - without it, the process
       // gets stuck waiting on epoll without ever making network connections
       const scriptFile = path.join(os.tmpdir(), `claude-runner-${Date.now()}.sh`);
-      // Use command substitution inside the -c argument since 'script' spawns a new shell
-      // that doesn't inherit environment variables. The $(cat ...) runs inside script's shell.
+
+      // Use an environment variable to pass the prompt file path into the script subshell
+      // This avoids complex shell escaping issues when the prompt contains special chars like ---
+      // The script command's subshell inherits environment variables from the parent bash
       const scriptContent = `#!/bin/bash
 # Use 'script' to provide a pseudo-TTY - Claude Code requires this
 # -q = quiet mode, -c = command to run, /dev/null = output file (discard)
-# The prompt is read via command substitution inside the script subshell
-script -q -c "claude --print --model ${model} --max-turns 20 --dangerously-skip-permissions \\"\\\$(cat '${promptFile}')\\"" /dev/null
+# CLAUDE_PROMPT_FILE is set by the parent script and inherited by script's subshell
+export CLAUDE_PROMPT_FILE="${promptFile}"
+script -q -c 'claude --print --model ${model} --max-turns 20 --dangerously-skip-permissions "$(cat "$CLAUDE_PROMPT_FILE")"' /dev/null
 `;
       fs.writeFileSync(scriptFile, scriptContent, { mode: 0o755 });
       console.log(`[ManagedClaudeCode] Wrote runner script to ${scriptFile} (using script for PTY)`);

@@ -204,13 +204,7 @@ export async function POST(request: NextRequest, context: RouteParams): Promise<
   const { uuid } = await context.params;
   const clientIp = getClientIp(request);
 
-  // Rate limit unauthenticated requests by IP (before validation)
-  const unauthRateLimit = RateLimiters.mcpUnauthenticated(clientIp);
-  if (!unauthRateLimit.success) {
-    return rateLimitExceeded(unauthRateLimit);
-  }
-
-  // Validate the endpoint exists
+  // Validate the endpoint exists first (lightweight check)
   const connection = await prisma.mcpConnection.findUnique({
     where: { endpointUuid: uuid },
   });
@@ -222,9 +216,14 @@ export async function POST(request: NextRequest, context: RouteParams): Promise<
     );
   }
 
-  // Validate the request
+  // Validate the request (authentication)
   const validation = await validateRequest(request, uuid);
   if ('error' in validation) {
+    // Request is unauthenticated - apply stricter IP-based rate limit
+    const unauthRateLimit = RateLimiters.mcpUnauthenticated(clientIp);
+    if (!unauthRateLimit.success) {
+      return rateLimitExceeded(unauthRateLimit);
+    }
     return NextResponse.json(
       { error: validation.error },
       {
@@ -234,7 +233,7 @@ export async function POST(request: NextRequest, context: RouteParams): Promise<
     );
   }
 
-  // Rate limit authenticated requests by connection (100 requests/minute)
+  // Request is authenticated - apply connection-based rate limit (100 requests/minute)
   const connRateLimit = RateLimiters.mcpRequest(validation.connectionId);
   if (!connRateLimit.success) {
     return rateLimitExceeded(connRateLimit);
@@ -1661,18 +1660,21 @@ async function executeToolCall(toolName: string, args: any, userId: string) {
               isError: true,
             };
           }
-          // Use the matching agent
+          // Use the matching agent - strip agentId from arguments as the agent doesn't need it
+          const { agentId: _agentId, ...toolArgs } = args;
           return executeAgentCommand(matches[0].agent, 'tools/call', {
             name: toolName,
-            arguments: args || {},
+            arguments: toolArgs,
           });
         }
 
         // No agentId specified - if only one agent has the tool, use it directly
         if (agentsWithTool.length === 1) {
+          // Strip agentId if present (shouldn't be, but just in case)
+          const { agentId: _agentId, ...toolArgs } = args || {};
           return executeAgentCommand(agentsWithTool[0], 'tools/call', {
             name: toolName,
-            arguments: args || {},
+            arguments: toolArgs,
           });
         }
 
@@ -1745,13 +1747,7 @@ export async function GET(request: NextRequest, context: RouteParams): Promise<R
   const clientIp = getClientIp(request);
   const userAgent = request.headers.get('user-agent') || 'unknown';
 
-  // Rate limit unauthenticated requests by IP
-  const unauthRateLimit = RateLimiters.mcpUnauthenticated(clientIp);
-  if (!unauthRateLimit.success) {
-    return rateLimitExceeded(unauthRateLimit);
-  }
-
-  // Validate the endpoint exists
+  // Validate the endpoint exists first (lightweight check)
   const connection = await prisma.mcpConnection.findUnique({
     where: { endpointUuid: uuid },
   });
@@ -1763,9 +1759,14 @@ export async function GET(request: NextRequest, context: RouteParams): Promise<R
     );
   }
 
-  // Validate the request
+  // Validate the request (authentication)
   const validation = await validateRequest(request, uuid);
   if ('error' in validation) {
+    // Request is unauthenticated - apply stricter IP-based rate limit
+    const unauthRateLimit = RateLimiters.mcpUnauthenticated(clientIp);
+    if (!unauthRateLimit.success) {
+      return rateLimitExceeded(unauthRateLimit);
+    }
     return NextResponse.json(
       { error: validation.error },
       {
@@ -1775,7 +1776,7 @@ export async function GET(request: NextRequest, context: RouteParams): Promise<R
     );
   }
 
-  // Rate limit authenticated requests by connection
+  // Request is authenticated - apply connection-based rate limit (100 requests/minute)
   const connRateLimit = RateLimiters.mcpRequest(validation.connectionId);
   if (!connRateLimit.success) {
     return rateLimitExceeded(connRateLimit);

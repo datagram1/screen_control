@@ -1057,3 +1057,21 @@ enum EmailTaskStatus {
   FAILED          // Failed with error
   SKIPPED         // Skipped (e.g., spam, not actionable)
 }
+
+// ============================================
+// TERMINAL SESSION TOKENS
+// ============================================
+
+model TerminalSessionToken {
+  id              String    @id @default(cuid())
+  token           String    @unique
+  agentId         String
+  userId          String
+  remoteAddress   String
+  expiresAt       DateTime
+  createdAt       DateTime  @default(now())
+
+  @@index([token])
+  @@index([expiresAt])
+  @@map("terminal_session_tokens")
+}
