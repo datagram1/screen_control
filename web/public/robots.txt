@@ -1,0 +1,16 @@
+# robots.txt for ScreenControl
+# AI-Powered Remote Desktop & Browser Automation
+
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /dashboard/
+Disallow: /auth/
+Disallow: /_next/
+Disallow: /admin/
+
+# Sitemap location
+Sitemap: https://screencontrol.knws.co.uk/sitemap.xml
+
+# Crawl delay for polite crawling
+Crawl-delay: 1
