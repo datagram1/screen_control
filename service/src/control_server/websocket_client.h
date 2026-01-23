@@ -41,6 +41,8 @@ public:
     using ConnectionCallback = std::function<void(bool connected)>;
     using StatusCallback = std::function<void(const std::string& agentId, const std::string& licenseStatus)>;
     using CommandCallback = std::function<nlohmann::json(const std::string& method, const nlohmann::json& params)>;
+    using HeartbeatCallback = std::function<void(int updateFlag)>;
+    using PermissionsCallback = std::function<void(bool masterMode, bool fileTransfer, bool localSettingsLocked)>;
 
     WebSocketClient();
     ~WebSocketClient();
@@ -59,11 +61,18 @@ public:
     std::string getLicenseStatus() const { return m_licenseStatus; }
     std::string getServerUrl() const { return m_serverUrl; }
 
+    // Server-controlled permissions
+    bool getMasterModeEnabled() const { return m_masterModeEnabled; }
+    bool getFileTransferEnabled() const { return m_fileTransferEnabled; }
+    bool getLocalSettingsLocked() const { return m_localSettingsLocked; }
+
     // Event callbacks
     void setLogCallback(LogCallback cb) { m_logCallback = cb; }
     void setConnectionCallback(ConnectionCallback cb) { m_connectionCallback = cb; }
     void setStatusCallback(StatusCallback cb) { m_statusCallback = cb; }
     void setCommandCallback(CommandCallback cb) { m_commandCallback = cb; }
+    void setHeartbeatCallback(HeartbeatCallback cb) { m_heartbeatCallback = cb; }
+    void setPermissionsCallback(PermissionsCallback cb) { m_permissionsCallback = cb; }
 
     // Send response to a command request
     void sendResponse(const std::string& requestId, const nlohmann::json& result);
@@ -138,6 +147,11 @@ private:
     int m_heartbeatInterval = 5000;
     ConnectionConfig m_config;
 
+    // Server-controlled permissions
+    std::atomic<bool> m_masterModeEnabled{false};
+    std::atomic<bool> m_fileTransferEnabled{false};
+    std::atomic<bool> m_localSettingsLocked{false};
+
     // Relay callbacks (for master mode)
     std::mutex m_relayMutex;
     std::map<std::string, std::function<void(const nlohmann::json&)>> m_relayCallbacks;
@@ -147,6 +161,8 @@ private:
     ConnectionCallback m_connectionCallback;
     StatusCallback m_statusCallback;
     CommandCallback m_commandCallback;
+    HeartbeatCallback m_heartbeatCallback;
+    PermissionsCallback m_permissionsCallback;
 };
 
 } // namespace ScreenControl

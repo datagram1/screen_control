@@ -115,7 +115,8 @@ export interface PendingRequest {
 // Messages FROM agent TO control server
 export interface AgentMessage {
   type: 'register' | 'response' | 'pong' | 'error' | 'heartbeat' | 'state_change' | 'tools_changed'
-      | 'stream_started' | 'stream_stopped' | 'stream_frame' | 'stream_cursor' | 'stream_error';
+      | 'stream_started' | 'stream_stopped' | 'stream_frame' | 'stream_cursor' | 'stream_error'
+      | 'relay_request';  // Master mode: relay command to another agent
   id?: string;
 
   // Registration data
@@ -143,6 +144,11 @@ export interface AgentMessage {
   // Tools changed notification data
   browserBridgeRunning?: boolean;
   timestamp?: number;
+
+  // Relay request data (for master mode)
+  targetAgentId?: string;
+  method?: string;
+  params?: Record<string, unknown>;
 }
 
 // Messages FROM control server TO agent

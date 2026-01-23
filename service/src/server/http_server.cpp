@@ -94,7 +94,7 @@ void HttpServer::setupHealthRoutes()
     m_server->Get("/status", [](const httplib::Request&, httplib::Response& res) {
         json response = {
             {"success", true},
-            {"version", "2.0.0"},
+            {"version", SERVICE_VERSION},
             {"platform", PLATFORM_ID},
             {"platformName", PLATFORM_NAME},
             {"licensed", Config::getInstance().isLicensed()},
@@ -1058,7 +1058,12 @@ void HttpServer::setupControlServerRoutes()
             {"connected", wsClient.isConnected()},
             {"serverUrl", wsClient.getServerUrl()},
             {"agentId", wsClient.getAgentId()},
-            {"licenseStatus", wsClient.getLicenseStatus()}
+            {"licenseStatus", wsClient.getLicenseStatus()},
+            {"permissions", {
+                {"masterMode", wsClient.getMasterModeEnabled()},
+                {"fileTransfer", wsClient.getFileTransferEnabled()},
+                {"localSettingsLocked", wsClient.getLocalSettingsLocked()}
+            }}
         };
         res.set_content(response.dump(), "application/json");
     });

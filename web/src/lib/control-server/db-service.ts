@@ -551,12 +551,20 @@ export async function checkLicenseStatus(agentDbId: string): Promise<{
   changed: boolean;
   message?: string;
   defaultBrowser?: string;
+  permissions?: {
+    masterMode: boolean;
+    fileTransfer: boolean;
+    localSettingsLocked: boolean;
+  };
 }> {
   const agent = await prisma.agent.findUnique({
     where: { id: agentDbId },
     select: {
       state: true,
       defaultBrowser: true,
+      masterModeEnabled: true,
+      fileTransferEnabled: true,
+      localSettingsLocked: true,
       license: {
         select: {
           status: true,
@@ -630,6 +638,11 @@ export async function checkLicenseStatus(agentDbId: string): Promise<{
     changed,
     message,
     defaultBrowser: agent.defaultBrowser?.toLowerCase() || undefined,
+    permissions: {
+      masterMode: agent.masterModeEnabled,
+      fileTransfer: agent.fileTransferEnabled,
+      localSettingsLocked: agent.localSettingsLocked,
+    },
   };
 }
 

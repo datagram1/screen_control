@@ -14,6 +14,10 @@
 @property (nonatomic, assign) BOOL controlServerConnected;
 @property (nonatomic, strong) NSString *currentAgentId;
 @property (nonatomic, strong) NSString *currentLicenseStatus;
+// Server-controlled permissions
+@property (nonatomic, assign) BOOL currentMasterModeEnabled;
+@property (nonatomic, assign) BOOL currentFileTransferEnabled;
+@property (nonatomic, assign) BOOL currentLocalSettingsLocked;
 @end
 
 @implementation ServiceClient
@@ -61,6 +65,18 @@
 
 - (NSString *)licenseStatus {
     return _currentLicenseStatus;
+}
+
+- (BOOL)masterModeEnabled {
+    return _currentMasterModeEnabled;
+}
+
+- (BOOL)fileTransferEnabled {
+    return _currentFileTransferEnabled;
+}
+
+- (BOOL)localSettingsLocked {
+    return _currentLocalSettingsLocked;
 }
 
 - (void)log:(NSString *)message {
@@ -133,6 +149,33 @@
                                                       agentId:self.currentAgentId
                                                 licenseStatus:self.currentLicenseStatus];
                                 });
+                            }
+                        }
+
+                        // Handle server-controlled permissions
+                        NSDictionary *permissions = status[@"permissions"];
+                        if (permissions) {
+                            BOOL masterMode = [permissions[@"masterMode"] boolValue];
+                            BOOL fileTransfer = [permissions[@"fileTransfer"] boolValue];
+                            BOOL localSettingsLocked = [permissions[@"localSettingsLocked"] boolValue];
+
+                            // Check if any permission changed
+                            if (masterMode != self.currentMasterModeEnabled ||
+                                fileTransfer != self.currentFileTransferEnabled ||
+                                localSettingsLocked != self.currentLocalSettingsLocked) {
+
+                                self.currentMasterModeEnabled = masterMode;
+                                self.currentFileTransferEnabled = fileTransfer;
+                                self.currentLocalSettingsLocked = localSettingsLocked;
+
+                                if ([self.delegate respondsToSelector:@selector(serviceClient:permissionsDidChange:fileTransferEnabled:localSettingsLocked:)]) {
+                                    dispatch_async(dispatch_get_main_queue(), ^{
+                                        [self.delegate serviceClient:self
+                                                permissionsDidChange:masterMode
+                                               fileTransferEnabled:fileTransfer
+                                              localSettingsLocked:localSettingsLocked];
+                                    });
+                                }
                             }
                         }
                     }

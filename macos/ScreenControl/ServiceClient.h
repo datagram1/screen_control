@@ -31,6 +31,8 @@ typedef NS_ENUM(NSInteger, ServiceConnectionState) {
 - (void)serviceClient:(id)client didChangeConnectionState:(ServiceConnectionState)state;
 /// Called when control server connection state changes (via service)
 - (void)serviceClient:(id)client controlServerDidConnect:(BOOL)connected agentId:(nullable NSString *)agentId licenseStatus:(nullable NSString *)status;
+/// Called when server-controlled permissions change
+- (void)serviceClient:(id)client permissionsDidChange:(BOOL)masterModeEnabled fileTransferEnabled:(BOOL)fileTransferEnabled localSettingsLocked:(BOOL)localSettingsLocked;
 /// Called for logging
 - (void)serviceClient:(id)client logMessage:(NSString *)message;
 @end
@@ -50,6 +52,11 @@ typedef NS_ENUM(NSInteger, ServiceConnectionState) {
 @property (nonatomic, readonly) BOOL isControlServerConnected;
 @property (nonatomic, readonly, nullable) NSString *agentId;
 @property (nonatomic, readonly, nullable) NSString *licenseStatus;
+
+/// Server-controlled permissions (from heartbeat_ack)
+@property (nonatomic, readonly) BOOL masterModeEnabled;
+@property (nonatomic, readonly) BOOL fileTransferEnabled;
+@property (nonatomic, readonly) BOOL localSettingsLocked;
 
 /// Delegate
 @property (nonatomic, weak, nullable) id<ServiceClientDelegate> delegate;

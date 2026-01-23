@@ -11,6 +11,9 @@
 #import <Security/Security.h>
 #import <IOKit/IOKitLib.h>
 #import <signal.h>
+#import <sys/socket.h>
+#import <netinet/in.h>
+#import <arpa/inet.h>
 
 #ifdef DEBUG
 #import "TestServer.h"
@@ -55,6 +58,9 @@ extern "C" {
 @property (assign) BOOL isAppTerminating;
 @property (strong) NSString* logFilePath;
 
+// App Nap prevention - keeps app responsive for remote commands
+@property (strong) id<NSObject> appNapActivity;
+
 // Helper method declarations
 - (NSString *)getToolsConfigPath;
 - (void)loadToolsConfig;
@@ -83,6 +89,12 @@ extern "C" {
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     self.startTime = [NSDate date];
+
+    // Prevent App Nap - CRITICAL for menu bar apps that need to stay responsive
+    // Without this, macOS may suspend the app and the GUIBridgeServer becomes unresponsive
+    // causing "Tray app unavailable" errors from the service
+    self.appNapActivity = [[NSProcessInfo processInfo] beginActivityWithOptions:(NSActivityUserInitiated | NSActivityLatencyCritical)
+                                                                          reason:@"ScreenControl must stay responsive for remote commands"];
 
     // Initialize file logging
     NSString *logsDir = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Logs/ScreenControl"];
@@ -139,8 +151,14 @@ extern "C" {
     // Start GUI Bridge server (receives commands from service)
     [self startGUIBridgeServer];
 
-    // Start Service client (monitors service status)
-    [self startServiceClient];
+    // Ensure bundled service is running before monitoring it
+    [self ensureBundledServiceRunning];
+
+    // Give service a moment to start before monitoring
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        // Start Service client (monitors service status)
+        [self startServiceClient];
+    });
 
     // Check control server connection status (now via service)
     [self checkControlServerConnection];
@@ -181,8 +199,15 @@ extern "C" {
     [self.testServer stop];
 #endif
 
+    // End App Nap prevention activity
+    if (self.appNapActivity) {
+        [[NSProcessInfo processInfo] endActivity:self.appNapActivity];
+        self.appNapActivity = nil;
+    }
+
     [self stopGUIBridgeServer];
     [self stopServiceClient];
+    [self stopBundledService];
     [self stopBrowserBridge];
     [self stopAgent];
     [self.statusTimer invalidate];
@@ -560,12 +585,12 @@ extern "C" {
     y -= 115;
 
     // Service Status Section (Background Service)
-    NSBox *serviceBox = [[NSBox alloc] initWithFrame:NSMakeRect(padding, y - 70, tabWidth - padding * 2, 80)];
+    NSBox *serviceBox = [[NSBox alloc] initWithFrame:NSMakeRect(padding, y - 100, tabWidth - padding * 2, 110)];
     serviceBox.title = @"Background Service";
     serviceBox.titlePosition = NSAtTop;
     [tabView addSubview:serviceBox];
 
-    boxY = 35;
+    boxY = 65;
 
     // Service connection status with indicator
     self.serviceStatusIndicator = [[NSImageView alloc] initWithFrame:NSMakeRect(boxPadding, boxY, 12, 12)];
@@ -578,14 +603,24 @@ extern "C" {
     [serviceBox addSubview:self.serviceStatusLabel];
     boxY -= 25;
 
-    // Control server status (via service)
+    // Run at Login checkbox
+    self.runAtLoginCheckbox = [[NSButton alloc] initWithFrame:NSMakeRect(boxPadding, boxY, controlWidth, 20)];
+    self.runAtLoginCheckbox.title = @"Start ScreenControl at login";
+    [self.runAtLoginCheckbox setButtonType:NSButtonTypeSwitch];
+    self.runAtLoginCheckbox.state = [self isRunAtLoginEnabled] ? NSControlStateValueOn : NSControlStateValueOff;
+    self.runAtLoginCheckbox.target = self;
+    self.runAtLoginCheckbox.action = @selector(runAtLoginCheckboxChanged:);
+    [serviceBox addSubview:self.runAtLoginCheckbox];
+    boxY -= 25;
+
+    // Service info label
     NSTextField *serviceInfoLabel = [self createLabel:@"The background service handles remote connections and survives screen lock."
                                                 frame:NSMakeRect(boxPadding, boxY - 5, tabWidth - padding * 2 - boxPadding * 2, 30)];
     serviceInfoLabel.textColor = [NSColor secondaryLabelColor];
     serviceInfoLabel.font = [NSFont systemFontOfSize:10];
     [serviceBox addSubview:serviceInfoLabel];
 
-    y -= 90;
+    y -= 120;
 
     // Status Section
     NSBox *statusBox = [[NSBox alloc] initWithFrame:NSMakeRect(padding, y - 70, tabWidth - padding * 2, 80)];
@@ -2759,6 +2794,77 @@ static NSString * const kKeychainService = @"com.screencontrol.agent.oauth";
     [self debugLog:message];
 }
 
+- (void)serviceClient:(id)client permissionsDidChange:(BOOL)masterModeEnabled fileTransferEnabled:(BOOL)fileTransferEnabled localSettingsLocked:(BOOL)localSettingsLocked {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSLog(@"[Service Client] Permissions changed: masterMode=%@, fileTransfer=%@, localSettingsLocked=%@",
+              masterModeEnabled ? @"YES" : @"NO",
+              fileTransferEnabled ? @"YES" : @"NO",
+              localSettingsLocked ? @"YES" : @"NO");
+
+        [self debugLog:[NSString stringWithFormat:@"Permissions updated: masterMode=%@, fileTransfer=%@, locked=%@",
+                        masterModeEnabled ? @"ON" : @"OFF",
+                        fileTransferEnabled ? @"ON" : @"OFF",
+                        localSettingsLocked ? @"YES" : @"NO"]];
+
+        // Handle local settings lock
+        [self updateSettingsLockedState:localSettingsLocked];
+    });
+}
+
+- (void)updateSettingsLockedState:(BOOL)locked {
+    // When local settings are locked, disable certain UI elements
+    if (locked) {
+        // Disable General tab settings
+        if (self.controlServerTextField) {
+            self.controlServerTextField.enabled = NO;
+        }
+
+        // Disable Tools tab
+        if (self.toolsTabView) {
+            // Disable all checkboxes in tools config
+            for (NSString *categoryId in self.categoryToggles) {
+                NSButton *toggle = self.categoryToggles[categoryId];
+                toggle.enabled = NO;
+            }
+            for (NSString *categoryId in self.toolToggles) {
+                NSDictionary *tools = self.toolToggles[categoryId];
+                for (NSString *toolName in tools) {
+                    NSButton *toggle = tools[toolName];
+                    toggle.enabled = NO;
+                }
+            }
+        }
+
+        // Update status bar tooltip
+        self.statusItem.button.toolTip = @"ScreenControl Agent (Settings Locked)";
+
+        NSLog(@"[AppDelegate] Settings locked by administrator");
+    } else {
+        // Enable General tab settings
+        if (self.controlServerTextField) {
+            self.controlServerTextField.enabled = YES;
+        }
+
+        // Enable Tools tab
+        if (self.toolsTabView) {
+            for (NSString *categoryId in self.categoryToggles) {
+                NSButton *toggle = self.categoryToggles[categoryId];
+                toggle.enabled = YES;
+            }
+            for (NSString *categoryId in self.toolToggles) {
+                NSDictionary *tools = self.toolToggles[categoryId];
+                for (NSString *toolName in tools) {
+                    NSButton *toggle = tools[toolName];
+                    toggle.enabled = YES;
+                }
+            }
+        }
+
+        // Update status bar tooltip
+        self.statusItem.button.toolTip = @"ScreenControl Agent";
+    }
+}
+
 #pragma mark - BrowserBridgeServerDelegate
 
 - (void)browserBridgeServerDidStart:(NSUInteger)port {
@@ -4204,6 +4310,204 @@ static NSString * const kKeychainService = @"com.screencontrol.agent.oauth";
     }
 
     return @[];
+}
+
+#pragma mark - Bundled Service Management
+
+- (void)ensureBundledServiceRunning {
+    // Check if service is already running on port 3459
+    int servicePort = 3459;
+
+    // Quick TCP check to see if something is listening
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        NSLog(@"[Service] Failed to create socket for port check");
+        return;
+    }
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(servicePort);
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    int result = connect(sock, (struct sockaddr *)&addr, sizeof(addr));
+    close(sock);
+
+    if (result == 0) {
+        NSLog(@"[Service] Service already running on port %d", servicePort);
+        return;
+    }
+
+    // Service not running - start the bundled service
+    NSString *bundlePath = [[NSBundle mainBundle] bundlePath];
+    NSString *servicePath = [bundlePath stringByAppendingPathComponent:@"Contents/MacOS/ScreenControlService"];
+
+    // Check if bundled service exists
+    if (![[NSFileManager defaultManager] fileExistsAtPath:servicePath]) {
+        NSLog(@"[Service] WARNING: Bundled ScreenControlService not found at %@", servicePath);
+        // Try fallback location (for development)
+        servicePath = @"/usr/local/bin/ScreenControlService";
+        if (![[NSFileManager defaultManager] fileExistsAtPath:servicePath]) {
+            NSLog(@"[Service] WARNING: ScreenControlService not found at fallback location either");
+            return;
+        }
+    }
+
+    NSLog(@"[Service] Starting bundled service from %@", servicePath);
+
+    self.serviceTask = [[NSTask alloc] init];
+    self.serviceTask.executableURL = [NSURL fileURLWithPath:servicePath];
+    self.serviceTask.arguments = @[@"--port", [NSString stringWithFormat:@"%d", servicePort]];
+
+    // Set up environment
+    NSMutableDictionary *env = [[[NSProcessInfo processInfo] environment] mutableCopy];
+    self.serviceTask.environment = env;
+
+    // Redirect output to log
+    NSPipe *outputPipe = [NSPipe pipe];
+    self.serviceTask.standardOutput = outputPipe;
+    self.serviceTask.standardError = outputPipe;
+
+    // Handle output asynchronously
+    outputPipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *handle) {
+        NSData *data = [handle availableData];
+        if (data.length > 0) {
+            NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+            NSLog(@"[Service Output] %@", output);
+        }
+    };
+
+    // Handle termination
+    __weak typeof(self) weakSelf = self;
+    self.serviceTask.terminationHandler = ^(NSTask *task) {
+        NSLog(@"[Service] Service terminated with status %d", task.terminationStatus);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            weakSelf.serviceTask = nil;
+            // Restart if not intentionally stopped and app is still running
+            if (!weakSelf.isAppTerminating) {
+                NSLog(@"[Service] Restarting service in 2 seconds...");
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                    [weakSelf ensureBundledServiceRunning];
+                });
+            }
+        });
+    };
+
+    NSError *error = nil;
+    [self.serviceTask launchAndReturnError:&error];
+
+    if (error) {
+        NSLog(@"[Service] Failed to launch service: %@", error.localizedDescription);
+        self.serviceTask = nil;
+    } else {
+        NSLog(@"[Service] Service launched with PID %d", self.serviceTask.processIdentifier);
+    }
+}
+
+- (void)stopBundledService {
+    if (self.serviceTask && self.serviceTask.isRunning) {
+        NSLog(@"[Service] Stopping bundled service (PID %d)", self.serviceTask.processIdentifier);
+        [self.serviceTask terminate];
+        self.serviceTask = nil;
+    }
+}
+
+#pragma mark - Login Item Management
+
+static NSString *const kLaunchAgentLabel = @"com.knws.screencontrol.agent";
+static NSString *const kRunAtLoginKey = @"runAtLogin";
+
+- (NSString *)launchAgentPath {
+    NSString *launchAgentsDir = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/LaunchAgents"];
+    return [launchAgentsDir stringByAppendingPathComponent:@"com.knws.screencontrol.agent.plist"];
+}
+
+- (BOOL)isRunAtLoginEnabled {
+    // Check both user default and actual LaunchAgent existence
+    BOOL defaultEnabled = [[NSUserDefaults standardUserDefaults] boolForKey:kRunAtLoginKey];
+    BOOL agentExists = [[NSFileManager defaultManager] fileExistsAtPath:[self launchAgentPath]];
+    return defaultEnabled && agentExists;
+}
+
+- (void)setRunAtLoginEnabled:(BOOL)enabled {
+    [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:kRunAtLoginKey];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+
+    NSString *launchAgentPath = [self launchAgentPath];
+    NSFileManager *fm = [NSFileManager defaultManager];
+
+    if (enabled) {
+        // Create LaunchAgents directory if needed
+        NSString *launchAgentsDir = [launchAgentPath stringByDeletingLastPathComponent];
+        if (![fm fileExistsAtPath:launchAgentsDir]) {
+            [fm createDirectoryAtPath:launchAgentsDir withIntermediateDirectories:YES attributes:nil error:nil];
+        }
+
+        // Create the plist
+        NSString *appPath = [[NSBundle mainBundle] bundlePath];
+        NSDictionary *plist = @{
+            @"Label": kLaunchAgentLabel,
+            @"ProgramArguments": @[
+                [appPath stringByAppendingPathComponent:@"Contents/MacOS/ScreenControl"]
+            ],
+            @"RunAtLoad": @YES,
+            @"KeepAlive": @{
+                @"SuccessfulExit": @NO
+            },
+            @"ProcessType": @"Interactive",
+            @"ThrottleInterval": @5
+        };
+
+        NSError *error = nil;
+        NSData *plistData = [NSPropertyListSerialization dataWithPropertyList:plist
+                                                                       format:NSPropertyListXMLFormat_v1_0
+                                                                      options:0
+                                                                        error:&error];
+        if (error) {
+            NSLog(@"[Login Item] Failed to serialize plist: %@", error);
+            return;
+        }
+
+        if ([plistData writeToFile:launchAgentPath atomically:YES]) {
+            NSLog(@"[Login Item] Created LaunchAgent at %@", launchAgentPath);
+
+            // Load the LaunchAgent
+            NSTask *task = [[NSTask alloc] init];
+            task.executableURL = [NSURL fileURLWithPath:@"/bin/launchctl"];
+            task.arguments = @[@"load", launchAgentPath];
+            [task launchAndReturnError:nil];
+            [task waitUntilExit];
+            NSLog(@"[Login Item] LaunchAgent loaded");
+        } else {
+            NSLog(@"[Login Item] Failed to write LaunchAgent plist");
+        }
+    } else {
+        // Unload and remove the LaunchAgent
+        if ([fm fileExistsAtPath:launchAgentPath]) {
+            // Unload first
+            NSTask *task = [[NSTask alloc] init];
+            task.executableURL = [NSURL fileURLWithPath:@"/bin/launchctl"];
+            task.arguments = @[@"unload", launchAgentPath];
+            [task launchAndReturnError:nil];
+            [task waitUntilExit];
+
+            // Remove the file
+            NSError *error = nil;
+            [fm removeItemAtPath:launchAgentPath error:&error];
+            if (error) {
+                NSLog(@"[Login Item] Failed to remove LaunchAgent: %@", error);
+            } else {
+                NSLog(@"[Login Item] Removed LaunchAgent");
+            }
+        }
+    }
+}
+
+- (IBAction)runAtLoginCheckboxChanged:(id)sender {
+    BOOL enabled = (self.runAtLoginCheckbox.state == NSControlStateValueOn);
+    [self setRunAtLoginEnabled:enabled];
+    NSLog(@"[Login Item] Run at login %@", enabled ? @"enabled" : @"disabled");
 }
 
 @end

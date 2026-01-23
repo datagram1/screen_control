@@ -6,6 +6,17 @@ import { useRouter } from 'next/navigation';
 
 type BrowserType = 'SYSTEM' | 'CHROME' | 'FIREFOX' | 'SAFARI' | 'EDGE' | null;
 
+interface Permissions {
+  masterMode: boolean;
+  fileTransfer: boolean;
+  localSettingsLocked: boolean;
+  lockedAt: string | null;
+  lockedBy: {
+    email: string;
+    name: string | null;
+  } | null;
+}
+
 interface Agent {
   id: string;
   agentKey: string;
@@ -88,6 +99,8 @@ export default function AgentDetailPage({ params }: PageProps) {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showResetSecretModal, setShowResetSecretModal] = useState(false);
   const [browserSaving, setBrowserSaving] = useState(false);
+  const [permissions, setPermissions] = useState<Permissions | null>(null);
+  const [permissionSaving, setPermissionSaving] = useState<string | null>(null);
 
   // Display name preference
   const [nameDisplay, setNameDisplay] = useState<'friendly' | 'machine' | 'both'>(() => {
@@ -120,8 +133,39 @@ export default function AgentDetailPage({ params }: PageProps) {
     }
   };
 
+  const fetchPermissions = async () => {
+    try {
+      const res = await fetch(`/api/agents/${id}/permissions`);
+      if (res.ok) {
+        const data = await res.json();
+        setPermissions(data.permissions);
+      }
+    } catch (err) {
+      console.error('Failed to fetch permissions:', err);
+    }
+  };
+
+  const updatePermission = async (key: 'masterMode' | 'fileTransfer' | 'localSettingsLocked', value: boolean) => {
+    setPermissionSaving(key);
+    try {
+      const res = await fetch(`/api/agents/${id}/permissions`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [key]: value }),
+      });
+      if (!res.ok) throw new Error('Failed to update permission');
+      const data = await res.json();
+      setPermissions(data.permissions);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update permission');
+    } finally {
+      setPermissionSaving(null);
+    }
+  };
+
   useEffect(() => {
     fetchAgent();
+    fetchPermissions();
     const interval = setInterval(fetchAgent, 5000);
     return () => clearInterval(interval);
   }, [id]);
@@ -611,6 +655,92 @@ export default function AgentDetailPage({ params }: PageProps) {
           <p className="text-blue-400 text-sm mt-3">Saving...</p>
         )}
       </div>
+
+      {/* Agent Permissions */}
+      {permissions && (
+        <div className="bg-slate-800 rounded-lg p-4">
+          <h3 className="text-white font-medium mb-4">Agent Permissions</h3>
+          <p className="text-slate-400 text-sm mb-4">
+            Server-controlled permissions that are pushed to the agent via heartbeat.
+            Changes take effect on the agent&apos;s next heartbeat.
+          </p>
+          <div className="space-y-4">
+            {/* Master Controller Mode */}
+            <div className="flex items-center justify-between p-3 bg-slate-700/50 rounded-lg">
+              <div>
+                <div className="text-white font-medium">Master Controller Mode</div>
+                <p className="text-slate-400 text-sm">
+                  Enable two-way STDIO communication for remote control of other agents
+                </p>
+              </div>
+              <button
+                onClick={() => updatePermission('masterMode', !permissions.masterMode)}
+                disabled={permissionSaving === 'masterMode'}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                  permissions.masterMode ? 'bg-blue-600' : 'bg-slate-600'
+                } ${permissionSaving === 'masterMode' ? 'opacity-50' : ''}`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    permissions.masterMode ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {/* File Transfer */}
+            <div className="flex items-center justify-between p-3 bg-slate-700/50 rounded-lg">
+              <div>
+                <div className="text-white font-medium">File Transfer</div>
+                <p className="text-slate-400 text-sm">
+                  Allow file uploads and downloads between agents
+                </p>
+              </div>
+              <button
+                onClick={() => updatePermission('fileTransfer', !permissions.fileTransfer)}
+                disabled={permissionSaving === 'fileTransfer'}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                  permissions.fileTransfer ? 'bg-blue-600' : 'bg-slate-600'
+                } ${permissionSaving === 'fileTransfer' ? 'opacity-50' : ''}`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    permissions.fileTransfer ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {/* Lock Local Settings */}
+            <div className="flex items-center justify-between p-3 bg-slate-700/50 rounded-lg">
+              <div>
+                <div className="text-white font-medium">Lock Local Settings</div>
+                <p className="text-slate-400 text-sm">
+                  Prevent local user from changing settings via tray/menu app
+                </p>
+                {permissions.localSettingsLocked && permissions.lockedAt && (
+                  <p className="text-yellow-400 text-xs mt-1">
+                    Locked {permissions.lockedBy?.name || permissions.lockedBy?.email || 'by admin'} on {new Date(permissions.lockedAt).toLocaleString()}
+                  </p>
+                )}
+              </div>
+              <button
+                onClick={() => updatePermission('localSettingsLocked', !permissions.localSettingsLocked)}
+                disabled={permissionSaving === 'localSettingsLocked'}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                  permissions.localSettingsLocked ? 'bg-yellow-600' : 'bg-slate-600'
+                } ${permissionSaving === 'localSettingsLocked' ? 'opacity-50' : ''}`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    permissions.localSettingsLocked ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Fingerprint Details */}
       {agent.fingerprintRaw && (

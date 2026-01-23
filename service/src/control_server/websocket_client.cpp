@@ -559,17 +559,20 @@ void WebSocketClient::sendRegistration()
     message["osType"] = PLATFORM_ID;
     message["osVersion"] = getOsVersion();
 
+    std::string arch;
 #if defined(__x86_64__) || defined(_M_X64)
-    message["arch"] = "x64";
+    arch = "x64";
 #elif defined(__aarch64__) || defined(_M_ARM64)
-    message["arch"] = "arm64";
+    arch = "arm64";
 #elif defined(__i386__) || defined(_M_IX86)
-    message["arch"] = "x86";
+    arch = "x86";
 #else
-    message["arch"] = "unknown";
+    arch = "unknown";
 #endif
+    message["arch"] = arch;
 
-    message["agentVersion"] = "2.0.0";
+    // Use SERVICE_VERSION from CMakeLists.txt (set via compile definition)
+    message["agentVersion"] = SERVICE_VERSION;
 
     if (!m_config.agentName.empty())
     {
@@ -661,6 +664,8 @@ void WebSocketClient::stopHeartbeat()
 void WebSocketClient::receiveLoop()
 {
     std::vector<uint8_t> buffer(16384);
+    int consecutiveErrors = 0;
+    const int maxConsecutiveErrors = 3;
 
     while (m_running && m_connected)
     {
@@ -668,12 +673,73 @@ void WebSocketClient::receiveLoop()
 
         if (bytesRead <= 0)
         {
-            if (m_running)
+            if (!m_running)
             {
-                log("Connection closed by server");
+                break;
             }
+
+            // Get SSL error details
+            int sslError = 0;
+            if (m_ssl)
+            {
+                sslError = SSL_get_error(static_cast<SSL*>(m_ssl), bytesRead);
+            }
+
+            // Handle retryable errors
+            if (sslError == SSL_ERROR_WANT_READ || sslError == SSL_ERROR_WANT_WRITE)
+            {
+                // These are not errors - just need to retry
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                consecutiveErrors = 0;
+                continue;
+            }
+
+            // Log detailed error information
+            std::string errorDetail;
+            switch (sslError)
+            {
+                case SSL_ERROR_NONE:
+                    errorDetail = "SSL_ERROR_NONE (clean close, bytes=" + std::to_string(bytesRead) + ")";
+                    break;
+                case SSL_ERROR_ZERO_RETURN:
+                    errorDetail = "SSL_ERROR_ZERO_RETURN (peer closed connection)";
+                    break;
+                case SSL_ERROR_SYSCALL:
+                    {
+                        int sysErr = errno;
+                        errorDetail = "SSL_ERROR_SYSCALL (errno=" + std::to_string(sysErr) + ": " + strerror(sysErr) + ")";
+                    }
+                    break;
+                case SSL_ERROR_SSL:
+                    {
+                        unsigned long errCode = ERR_get_error();
+                        char errBuf[256];
+                        ERR_error_string_n(errCode, errBuf, sizeof(errBuf));
+                        errorDetail = "SSL_ERROR_SSL (" + std::string(errBuf) + ")";
+                    }
+                    break;
+                default:
+                    errorDetail = "Unknown SSL error " + std::to_string(sslError);
+            }
+
+            log("Connection closed: " + errorDetail);
+
+            // For syscall errors, check if it's a temporary issue
+            if (sslError == SSL_ERROR_SYSCALL && errno == EAGAIN)
+            {
+                consecutiveErrors++;
+                if (consecutiveErrors < maxConsecutiveErrors)
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    continue;
+                }
+            }
+
             break;
         }
+
+        // Reset error counter on successful read
+        consecutiveErrors = 0;
 
         // Parse WebSocket frame
         if (bytesRead < 2) continue;
@@ -841,13 +907,12 @@ void WebSocketClient::handleHeartbeatAck(const json& j)
         m_statusCallback(m_agentId, m_licenseStatus);
     }
 
-    // Check for update flag (1.3.0)
-    // u: 0 = no update, 1 = update available, 2 = forced update
-    int updateFlag = j.value("u", 0);
-    if (updateFlag > 0)
+    // Check for update flag (supports both "u" and "updateFlag" field names)
+    // 0 = no update, 1 = update available, 2 = forced update
+    int updateFlag = j.value("u", j.value("updateFlag", 0));
+    if (m_heartbeatCallback)
     {
-        // Notify UpdateManager of available update
-        UpdateManager::getInstance().onHeartbeat(updateFlag);
+        m_heartbeatCallback(updateFlag);
     }
 
     // Check for browser preference (1.3.1)
@@ -860,6 +925,34 @@ void WebSocketClient::handleHeartbeatAck(const json& j)
             log("Updating default browser preference: " + browser);
             config.setDefaultBrowser(browser);
             config.save();
+        }
+    }
+
+    // Handle server-controlled permissions
+    if (j.contains("permissions"))
+    {
+        const auto& perms = j["permissions"];
+        bool masterMode = perms.value("masterMode", false);
+        bool fileTransfer = perms.value("fileTransfer", false);
+        bool localSettingsLocked = perms.value("localSettingsLocked", false);
+
+        // Check if any permission changed
+        if (masterMode != m_masterModeEnabled.load() ||
+            fileTransfer != m_fileTransferEnabled.load() ||
+            localSettingsLocked != m_localSettingsLocked.load())
+        {
+            m_masterModeEnabled = masterMode;
+            m_fileTransferEnabled = fileTransfer;
+            m_localSettingsLocked = localSettingsLocked;
+
+            log("Permissions updated: masterMode=" + std::string(masterMode ? "true" : "false") +
+                ", fileTransfer=" + std::string(fileTransfer ? "true" : "false") +
+                ", localSettingsLocked=" + std::string(localSettingsLocked ? "true" : "false"));
+
+            if (m_permissionsCallback)
+            {
+                m_permissionsCallback(masterMode, fileTransfer, localSettingsLocked);
+            }
         }
     }
 }

@@ -30,6 +30,9 @@ model User {
   // Account status
   accountStatus           AccountStatus @default(PENDING_VERIFICATION)
 
+  // Role (admin can manage all agents, user can only manage own)
+  role                    UserRole  @default(USER)
+
   // Email verification
   emailVerificationToken  String?
   emailVerificationExpires DateTime?
@@ -70,6 +73,12 @@ model User {
 
   // Job scheduler
   scheduledJobs           ScheduledJob[]
+
+  // Agent permissions locked by this user
+  lockedAgents            Agent[]   @relation("AgentPermissionLocker")
+
+  // File transfers initiated by this user
+  fileTransfers           FileTransfer[]
 
   @@map("users")
 }
@@ -216,6 +225,16 @@ model Agent {
   // Agent secret for re-authentication after token expiry
   agentSecretHash   String?   // bcrypt hash of agent's API key
 
+  // Server-controlled permissions (pushed via heartbeat)
+  masterModeEnabled     Boolean   @default(false)  // Two-way STDIO enabled
+  fileTransferEnabled   Boolean   @default(false)  // Can send/receive files
+  localSettingsLocked   Boolean   @default(false)  // Lock tray/menu settings
+
+  // Permission metadata
+  permissionsLockedAt   DateTime?
+  permissionsLockedById String?
+  permissionsLockedBy   User?     @relation("AgentPermissionLocker", fields: [permissionsLockedById], references: [id], onDelete: SetNull)
+
   // Relations
   license           License     @relation(fields: [licenseId], references: [id], onDelete: Cascade)
   owner             User?       @relation("AgentOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
@@ -223,6 +242,8 @@ model Agent {
   auditLogs         AuditLog[]
   fingerprintChanges FingerprintChange[]
   commandLogs       CommandLog[]
+  transfersAsSource FileTransfer[] @relation("TransferSource")
+  transfersAsDest   FileTransfer[] @relation("TransferDest")
 
   @@unique([customerId, machineId])
   @@index([ownerUserId])
@@ -727,6 +748,11 @@ enum AccountStatus {
   DELETED
 }
 
+enum UserRole {
+  USER          // Can manage own agents only
+  ADMIN         // Can manage all agents
+}
+
 enum LicenseStatus {
   ACTIVE
   EXPIRED
@@ -802,6 +828,49 @@ enum CommandStatus {
   FAILED      // Failed with error
   TIMEOUT     // Timed out
   CANCELLED   // Cancelled before completion
+}
+
+enum FileTransferStatus {
+  PENDING
+  TRANSFERRING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+// ============================================
+// FILE TRANSFER
+// ============================================
+
+model FileTransfer {
+  id                String   @id @default(cuid())
+  transferId        String   @unique  // Unique identifier for this transfer
+
+  sourceAgentId     String?
+  destAgentId       String?
+  initiatorUserId   String
+
+  fileName          String
+  sourcePath        String
+  destPath          String?
+  fileSize          BigInt
+
+  status            FileTransferStatus @default(PENDING)
+  bytesTransferred  BigInt   @default(0)
+
+  errorMessage      String?
+  createdAt         DateTime @default(now())
+  completedAt       DateTime?
+
+  sourceAgent       Agent?   @relation("TransferSource", fields: [sourceAgentId], references: [id], onDelete: SetNull)
+  destAgent         Agent?   @relation("TransferDest", fields: [destAgentId], references: [id], onDelete: SetNull)
+  initiator         User     @relation(fields: [initiatorUserId], references: [id], onDelete: Cascade)
+
+  @@index([sourceAgentId])
+  @@index([destAgentId])
+  @@index([initiatorUserId])
+  @@index([status])
+  @@map("file_transfers")
 }
 
 // ============================================

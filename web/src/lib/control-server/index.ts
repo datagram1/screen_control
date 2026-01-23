@@ -11,3 +11,5 @@ export { handleAgentConnection } from './websocket-handler';
 export * from './db-service';
 export * from './update-service';
 export * from './version-utils';
+export { fileTransferManager, FileTransferManager } from './file-transfer-manager';
+export { masterSessionManager, MasterSessionManager } from './master-session-manager';

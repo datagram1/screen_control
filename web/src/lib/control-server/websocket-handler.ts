@@ -13,6 +13,7 @@ import { checkLicenseStatus } from './db-service';
 import { checkUpdateAvailable } from './update-service';
 import { streamSessionManager } from './stream-session-manager';
 import { terminalSessionManager } from './terminal-session-manager';
+import { masterSessionManager } from './master-session-manager';
 
 /**
  * Handle a new agent WebSocket connection
@@ -51,6 +52,14 @@ export function handleAgentConnection(
                 },
               })
             );
+
+            // Register as master session if agent has master mode enabled
+            // This is checked via database in masterSessionManager
+            if (agent.dbId) {
+              masterSessionManager.registerMasterSession(agent.dbId, socket).catch((err) => {
+                console.error('[WS] Failed to register master session:', err);
+              });
+            }
           } else {
             socket.send(
               JSON.stringify({
@@ -110,7 +119,7 @@ export function handleAgentConnection(
                   }
                 }
 
-                // Send heartbeat_ack with license status, pending commands flag, and update flag
+                // Send heartbeat_ack with license status, pending commands flag, update flag, and permissions
                 socket.send(
                   JSON.stringify({
                     type: 'heartbeat_ack',
@@ -121,6 +130,7 @@ export function handleAgentConnection(
                     pendingCommands: hasPendingCommands, // (1.2.19)
                     u: updateFlag, // Update flag: 0 = none, 1 = available, 2 = forced (1.3.0)
                     defaultBrowser: licenseCheck.defaultBrowser, // Browser preference (1.3.1)
+                    permissions: licenseCheck.permissions, // Server-controlled permissions
                     config: licenseCheck.changed
                       ? {
                           heartbeatInterval: getHeartbeatInterval(agent.powerState),
@@ -209,6 +219,51 @@ export function handleAgentConnection(
           }
           break;
 
+        // Master mode: relay command to another agent
+        case 'relay_request':
+          if (agent && agent.dbId) {
+            const { targetAgentId, method, params } = msg;
+            if (!targetAgentId || !method) {
+              socket.send(JSON.stringify({
+                type: 'relay_response',
+                id: msg.id,
+                error: 'Missing targetAgentId or method',
+              }));
+              break;
+            }
+
+            // Check if this agent is a master
+            if (!masterSessionManager.isMaster(agent.dbId)) {
+              socket.send(JSON.stringify({
+                type: 'relay_response',
+                id: msg.id,
+                error: 'Agent is not authorized for master mode',
+              }));
+              break;
+            }
+
+            // Relay the command
+            masterSessionManager.relayCommand(
+              agent.dbId,
+              targetAgentId,
+              method,
+              params || {}
+            ).then((result) => {
+              socket.send(JSON.stringify({
+                type: 'relay_response',
+                id: msg.id,
+                result,
+              }));
+            }).catch((err) => {
+              socket.send(JSON.stringify({
+                type: 'relay_response',
+                id: msg.id,
+                error: err.message,
+              }));
+            });
+          }
+          break;
+
         default:
           console.warn(`[WS] Unknown message type: ${msg.type}`);
       }
@@ -250,6 +305,10 @@ export function handleAgentConnection(
       streamSessionManager.handleAgentDisconnect(agent.id);
       // End any active terminal sessions for this agent
       terminalSessionManager.handleAgentDisconnect(agent.id);
+      // Unregister master session if this was a master controller
+      if (agent.dbId) {
+        masterSessionManager.unregisterMasterSession(agent.dbId);
+      }
       await registry.unregister(agent.id);
     }
   });
