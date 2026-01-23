@@ -52,9 +52,10 @@ class MasterSessionManager {
       where: { id: agentDbId },
       select: {
         id: true,
-        customerId: true,
+        ownerUserId: true,
         masterModeEnabled: true,
-        name: true,
+        hostname: true,
+        displayName: true,
       },
     });
 
@@ -71,7 +72,7 @@ class MasterSessionManager {
     const session: MasterSession = {
       agentId: agent.id,
       agentDbId: agentDbId,
-      customerId: agent.customerId || '',
+      customerId: agent.ownerUserId || '',
       socket,
       registeredAt: new Date(),
       lastActivity: new Date(),
@@ -79,7 +80,7 @@ class MasterSessionManager {
 
     this.masterSessions.set(agentDbId, session);
 
-    console.log(`[MasterSession] Registered master session for ${agent.name || agentDbId}`);
+    console.log(`[MasterSession] Registered master session for ${agent.displayName || agent.hostname || agentDbId}`);
     return true;
   }
 
@@ -127,15 +128,16 @@ class MasterSessionManager {
       throw new Error('Master session not found');
     }
 
-    // Get all agents within the same customer scope
+    // Get all agents within the same owner scope
     const agents = await prisma.agent.findMany({
       where: {
-        customerId: session.customerId,
+        ownerUserId: session.customerId,
         id: { not: masterAgentId }, // Exclude self
       },
       select: {
         id: true,
-        name: true,
+        hostname: true,
+        displayName: true,
         osType: true,
         isOnline: true,
         powerState: true,
@@ -145,7 +147,7 @@ class MasterSessionManager {
 
     return agents.map((a) => ({
       agentId: a.id,
-      name: a.name || 'Unknown',
+      name: a.displayName || a.hostname || 'Unknown',
       osType: a.osType,
       isOnline: a.isOnline,
       powerState: a.powerState,
@@ -167,18 +169,18 @@ class MasterSessionManager {
       throw new Error('Master session not found');
     }
 
-    // Verify target agent is accessible (same customer)
+    // Verify target agent is accessible (same owner)
     const targetAgent = await prisma.agent.findUnique({
       where: { id: targetAgentId },
-      select: { customerId: true, name: true },
+      select: { ownerUserId: true, hostname: true },
     });
 
     if (!targetAgent) {
       throw new Error(`Target agent not found: ${targetAgentId}`);
     }
 
-    if (targetAgent.customerId !== session.customerId) {
-      throw new Error('Access denied: target agent is not in the same customer scope');
+    if (targetAgent.ownerUserId !== session.customerId) {
+      throw new Error('Access denied: target agent is not in the same owner scope');
     }
 
     // Check if target is connected
