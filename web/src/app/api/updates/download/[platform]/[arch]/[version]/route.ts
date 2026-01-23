@@ -15,7 +15,7 @@ import * as path from 'path';
 export const dynamic = 'force-dynamic';
 
 // Builds storage directory (configurable via env)
-const BUILDS_DIR = process.env.BUILDS_DIR || '/var/www/screencontrol/builds';
+const BUILDS_DIR = process.env.BUILDS_DIR || '/var/www/html/screencontrol/builds';
 
 // Map query param values to Prisma enum values
 const platformMap: Record<string, 'WINDOWS' | 'MACOS' | 'LINUX'> = {
