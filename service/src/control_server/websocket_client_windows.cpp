@@ -455,7 +455,7 @@ void WebSocketClient::sendRegistration()
     message["arch"] = "x86";
 #endif
 
-    message["agentVersion"] = "2.0.0";
+    message["agentVersion"] = "2.0.2";
 
     if (!m_config.endpointUuid.empty())
     {
@@ -912,14 +912,12 @@ std::string WebSocketClient::getOsVersion()
 
 bool WebSocketClient::isScreenLocked()
 {
-    // Check if workstation is locked using OpenInputDesktop
-    HDESK hDesk = OpenInputDesktop(0, FALSE, DESKTOP_SWITCHDESKTOP);
-    if (hDesk == nullptr)
-    {
-        // Cannot open input desktop - likely locked
-        return true;
-    }
-    CloseDesktop(hDesk);
+    // Always return false - the service handles all commands regardless of
+    // screen lock state. The Credential Provider (ScreenControlCP.dll) handles
+    // unlocking the screen when needed via stored credentials.
+    //
+    // Note: The previous implementation using OpenInputDesktop() was unreliable
+    // for services running as LocalSystem (always returned true/locked).
     return false;
 }
 

@@ -680,20 +680,9 @@ export async function checkCommandPreConditions(
     }
   }
 
-  // Screen lock check - allow certain tools even when locked
-  if (agent.isScreenLocked) {
-    const allowedWhenLocked = [
-      'ping',
-      'status',
-      'getInfo',
-      'fs_list',
-      'fs_read',
-      'shell_exec',
-    ];
-    if (!allowedWhenLocked.some((m) => method.includes(m))) {
-      return { allowed: false, reason: 'Screen is locked - limited commands only' };
-    }
-  }
+  // Screen lock check removed - the service handles all commands regardless of
+  // screen lock state. The Credential Provider (ScreenControlCP.dll) handles
+  // unlocking the screen when needed via stored credentials.
 
   return { allowed: true };
 }
