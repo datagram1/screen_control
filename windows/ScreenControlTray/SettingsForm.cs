@@ -17,46 +17,46 @@ namespace ScreenControlTray
     {
         private readonly ServiceClient _serviceClient;
 
-        // Tabs
-        private TabControl _tabControl;
+        // Tabs - initialized in InitializeComponent()
+        private TabControl _tabControl = null!;
 
-        // Status tab
-        private Label _statusLabel;
-        private Label _versionLabel;
-        private Label _machineIdLabel;
-        private Button _copyMachineIdButton;
+        // Status tab - initialized in InitializeStatusTab()
+        private Label _statusLabel = null!;
+        private Label _versionLabel = null!;
+        private Label _machineIdLabel = null!;
+        private Button _copyMachineIdButton = null!;
 
-        // License tab
-        private Label _licenseStatusLabel;
-        private TextBox _licenseKeyTextBox;
-        private Button _activateButton;
-        private Button _deactivateButton;
-        private Label _expiryLabel;
+        // License tab - initialized in InitializeLicenseTab()
+        private Label _licenseStatusLabel = null!;
+        private TextBox _licenseKeyTextBox = null!;
+        private Button _activateButton = null!;
+        private Button _deactivateButton = null!;
+        private Label _expiryLabel = null!;
 
-        // Settings tab
-        private TextBox _controlServerUrlTextBox;
-        private NumericUpDown _portNumeric;
-        private CheckBox _autoStartCheckBox;
-        private CheckBox _loggingCheckBox;
-        private Button _saveButton;
+        // Settings tab - initialized in InitializeSettingsTab()
+        private TextBox _controlServerUrlTextBox = null!;
+        private NumericUpDown _portNumeric = null!;
+        private CheckBox _autoStartCheckBox = null!;
+        private CheckBox _loggingCheckBox = null!;
+        private Button _saveButton = null!;
 
-        // Debug tab
-        private TextBox _debugServerUrlTextBox;
-        private TextBox _debugEndpointUuidTextBox;
-        private TextBox _debugCustomerIdTextBox;
-        private CheckBox _debugConnectOnStartupCheckBox;
-        private Button _debugConnectButton;
-        private Button _debugDisconnectButton;
-        private Button _debugSaveSettingsButton;
-        private Button _debugCopyMcpUrlButton;
-        private Label _debugConnectionStatusLabel;
-        private Label _debugLicenseStatusLabel;
-        private Label _debugAgentIdLabel;
-        private TextBox _debugLogTextBox;
+        // Debug tab - initialized in InitializeDebugTab()
+        private TextBox _debugServerUrlTextBox = null!;
+        private TextBox _debugEndpointUuidTextBox = null!;
+        private TextBox _debugCustomerIdTextBox = null!;
+        private CheckBox _debugConnectOnStartupCheckBox = null!;
+        private Button _debugConnectButton = null!;
+        private Button _debugDisconnectButton = null!;
+        private Button _debugSaveSettingsButton = null!;
+        private Button _debugCopyMcpUrlButton = null!;
+        private Label _debugConnectionStatusLabel = null!;
+        private Label _debugLicenseStatusLabel = null!;
+        private Label _debugAgentIdLabel = null!;
+        private TextBox _debugLogTextBox = null!;
         private WebSocketClient? _webSocketClient;
 
-        // Tools tab
-        private Panel _toolsPanel;
+        // Tools tab - initialized in InitializeToolsTab()
+        private Panel _toolsPanel = null!;
         private Dictionary<string, Dictionary<string, bool>> _toolsConfig;
         private Dictionary<string, CheckBox> _categoryCheckboxes = new();
         private Dictionary<string, Dictionary<string, CheckBox>> _toolCheckboxes = new();
@@ -702,17 +702,28 @@ namespace ScreenControlTray
             try
             {
                 var configPath = GetDebugConfigPath();
+                DebugConfig? config = null;
+
                 if (File.Exists(configPath))
                 {
                     var json = File.ReadAllText(configPath);
-                    var config = JsonSerializer.Deserialize<DebugConfig>(json);
-                    if (config != null)
-                    {
-                        _debugServerUrlTextBox.Text = config.ServerUrl;
-                        _debugEndpointUuidTextBox.Text = config.EndpointUuid;
-                        _debugCustomerIdTextBox.Text = config.CustomerId;
-                        _debugConnectOnStartupCheckBox.Checked = config.ConnectOnStartup;
-                    }
+                    config = JsonSerializer.Deserialize<DebugConfig>(json);
+                }
+
+                if (config != null)
+                {
+                    _debugServerUrlTextBox.Text = config.ServerUrl;
+                    _debugEndpointUuidTextBox.Text = config.EndpointUuid;
+                    _debugCustomerIdTextBox.Text = config.CustomerId;
+                    _debugConnectOnStartupCheckBox.Checked = config.ConnectOnStartup;
+                }
+
+                // Auto-generate Endpoint UUID if empty
+                if (string.IsNullOrWhiteSpace(_debugEndpointUuidTextBox.Text))
+                {
+                    _debugEndpointUuidTextBox.Text = Guid.NewGuid().ToString();
+                    // Save immediately so the UUID persists
+                    SaveDebugConfig();
                 }
             }
             catch (Exception ex)
