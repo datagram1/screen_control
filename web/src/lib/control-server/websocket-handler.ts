@@ -118,6 +118,11 @@ export function handleAgentConnection(
                     updateFlag = updateInfo.isForced ? 2 : 1; // 2 = forced, 1 = available
                     console.log(`[Update] Agent ${agent.machineName || agent.id} (${agent.osType}/${agent.arch} v${agent.agentVersion}) -> update available: ${updateInfo.version}, flag=${updateFlag}`);
                   }
+                } else {
+                  // Log missing data for debugging
+                  if (!agent.arch) {
+                    console.log(`[Update] Agent ${agent.machineName || agent.id} missing arch (osType=${agent.osType}, version=${agent.agentVersion})`);
+                  }
                 }
 
                 // Send heartbeat_ack with license status, pending commands flag, update flag, and permissions
