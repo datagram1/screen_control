@@ -94,14 +94,24 @@ bool UpdateManager::applyUpdateLinux()
         script << "tar -xzf \"" << m_downloadPath << "\"\n\n";
 
         // Install new binary
+        // Tarball extracts to screencontrol/ subdirectory with ScreenControlService binary
         script << "echo \"Installing new binary...\"\n";
-        script << "if [ -f \"" << downloadDir << "/screencontrol\" ]; then\n";
-        script << "    cp -f \"" << downloadDir << "/screencontrol\" \"" << installDir << "/\"\n";
-        script << "    chmod 755 \"" << installDir << "/screencontrol\"\n";
-        script << "fi\n";
-        script << "if [ -f \"" << downloadDir << "/screencontrol-tray\" ]; then\n";
-        script << "    cp -f \"" << downloadDir << "/screencontrol-tray\" \"" << installDir << "/\"\n";
-        script << "    chmod 755 \"" << installDir << "/screencontrol-tray\"\n";
+        script << "EXTRACT_DIR=\"" << downloadDir << "/screencontrol\"\n";
+        script << "if [ -f \"$EXTRACT_DIR/ScreenControlService\" ]; then\n";
+        script << "    cp -f \"$EXTRACT_DIR/ScreenControlService\" \"" << installDir << "/ScreenControlService\"\n";
+        script << "    chmod 755 \"" << installDir << "/ScreenControlService\"\n";
+        script << "    echo \"Installed ScreenControlService\"\n";
+        script << "elif [ -f \"" << downloadDir << "/ScreenControlService\" ]; then\n";
+        script << "    # Fallback: binary directly in download dir\n";
+        script << "    cp -f \"" << downloadDir << "/ScreenControlService\" \"" << installDir << "/ScreenControlService\"\n";
+        script << "    chmod 755 \"" << installDir << "/ScreenControlService\"\n";
+        script << "    echo \"Installed ScreenControlService (flat)\"\n";
+        script << "else\n";
+        script << "    echo \"ERROR: ScreenControlService not found in update package!\"\n";
+        script << "    echo \"Contents of download dir:\"\n";
+        script << "    ls -la \"" << downloadDir << "\"\n";
+        script << "    ls -la \"$EXTRACT_DIR\" 2>/dev/null || true\n";
+        script << "    exit 1\n";
         script << "fi\n\n";
 
         // Start service

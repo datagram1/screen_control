@@ -632,7 +632,7 @@ json CommandDispatcher::handleMachineInfo()
 #endif
 
     // Add service info
-    info["serviceVersion"] = "2.0.0";
+    info["serviceVersion"] = SERVICE_VERSION;
 #if PLATFORM_MACOS || PLATFORM_LINUX
     info["serviceRunningAsRoot"] = (geteuid() == 0);
 #else

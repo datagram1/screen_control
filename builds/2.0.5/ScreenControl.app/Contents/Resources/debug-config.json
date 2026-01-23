@@ -1,0 +1,11 @@
+{
+  "serverUrl": "wss://screencontrol.knws.co.uk/ws",
+  "serverHttpUrl": "https://screencontrol.knws.co.uk",
+  "endpointUuid": "cmivv9aar000310vcfp9lg0qj",
+  "customerId": "cmivqj7nk000054pkib1rkjdb",
+  "developerEmail": "richard.brown@knws.co.uk",
+  "connectOnStartup": true,
+  "autoFillDebugSettings": true,
+  "environment": "production",
+  "notes": "Dev Testing connection for richard.brown@knws.co.uk"
+}

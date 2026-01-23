@@ -68,6 +68,9 @@ export default async function DashboardLayout({
               <Link href="/dashboard/help" className="text-slate-300 hover:text-white transition">
                 Help
               </Link>
+              <Link href="/dashboard/downloads" className="text-slate-300 hover:text-white transition">
+                Downloads
+              </Link>
               {isDebugMode() && (
                 <Link href="/dashboard/debug" className="text-orange-400 hover:text-orange-300 transition">
                   Debug

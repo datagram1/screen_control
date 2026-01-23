@@ -165,3 +165,8 @@ service/install/windows/
 # Misc build files
 build_service.bat
 todo/
+
+# Code signing certificates
+windows-build-package/certs/*.pfx
+windows-build-package/certs/*.pem
+windows-build-package/certs/*.p12

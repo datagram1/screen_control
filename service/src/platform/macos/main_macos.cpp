@@ -11,6 +11,7 @@
 #include "../../server/http_server.h"
 #include "../../control_server/websocket_client.h"
 #include "../../control_server/command_dispatcher.h"
+#include "../../update/update_manager.h"
 #include "../../libs/httplib.h"
 #include <csignal>
 #include <atomic>
@@ -223,6 +224,53 @@ int main(int argc, char* argv[])
     wsClient.setCommandCallback([&dispatcher](const std::string& method, const nlohmann::json& params) {
         return dispatcher.dispatch(method, params);
     });
+
+    // Configure auto-update system
+    auto& updateManager = UpdateManager::getInstance();
+    UpdateConfig updateConfig;
+    updateConfig.serverUrl = "https://screencontrol.knws.co.uk";
+    updateConfig.currentVersion = SERVICE_VERSION;  // Defined in CMakeLists.txt
+    updateConfig.platform = "macos";
+#if defined(__aarch64__) || defined(__arm64__)
+    updateConfig.arch = "arm64";
+#else
+    updateConfig.arch = "x64";
+#endif
+    updateConfig.machineId = Config::getInstance().getMachineId();
+    updateConfig.autoDownload = true;
+    updateConfig.autoInstall = true;  // Auto-install updates
+    updateConfig.checkIntervalHeartbeats = 60;  // Check every ~5 minutes (60 * 5s heartbeats)
+
+    updateManager.configure(updateConfig);
+
+    updateManager.setStatusCallback([](UpdateStatus status, const std::string& message) {
+        std::string statusStr;
+        switch (status) {
+            case UpdateStatus::CHECKING: statusStr = "CHECKING"; break;
+            case UpdateStatus::AVAILABLE: statusStr = "AVAILABLE"; break;
+            case UpdateStatus::DOWNLOADING: statusStr = "DOWNLOADING"; break;
+            case UpdateStatus::DOWNLOADED: statusStr = "DOWNLOADED"; break;
+            case UpdateStatus::INSTALLING: statusStr = "INSTALLING"; break;
+            case UpdateStatus::FAILED: statusStr = "FAILED"; break;
+            case UpdateStatus::UP_TO_DATE: statusStr = "UP_TO_DATE"; break;
+            default: statusStr = "IDLE"; break;
+        }
+        Logger::info("[Update] Status: " + statusStr + " - " + message);
+    });
+
+    updateManager.setProgressCallback([](uint64_t downloaded, uint64_t total) {
+        if (total > 0) {
+            int percent = static_cast<int>((downloaded * 100) / total);
+            Logger::info("[Update] Download progress: " + std::to_string(percent) + "%");
+        }
+    });
+
+    // Wire up heartbeat callback to check for updates
+    wsClient.setHeartbeatCallback([&updateManager](int updateFlag) {
+        updateManager.onHeartbeat(updateFlag);
+    });
+
+    Logger::info("Auto-update system configured (version " + std::string(SERVICE_VERSION) + ")");
 
     // Load WebSocket config
     std::string wsConfigPath = std::string(SERVICE_CONFIG_DIR) + "/connection.json";

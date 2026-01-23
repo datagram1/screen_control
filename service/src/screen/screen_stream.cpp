@@ -9,6 +9,10 @@
 #include <chrono>
 #include <sstream>
 #include <iomanip>
+#include <cstdio>
+#include <cstring>
+#include <cstdlib>
+#include <algorithm>  // For std::find_if
 
 #ifdef PLATFORM_MACOS
 // Use libscreencontrol on macOS
@@ -135,6 +139,67 @@ std::vector<DisplayInfo> ScreenStream::getDisplays() const
             displays.push_back(di);
         }
     }
+#elif defined(PLATFORM_LINUX)
+    // Linux: Detect if a graphical session is available
+    // Check multiple methods since the service runs as systemd unit without user env vars
+    bool hasGraphicalSession = false;
+    std::string displayType = "Unknown";
+
+    // Method 1: Check for running display server processes
+    FILE* pipe = popen("pgrep -x 'Xorg|Xwayland|gnome-shell|plasmashell|sway|kwin_wayland' 2>/dev/null", "r");
+    if (pipe) {
+        char buffer[128];
+        if (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+            hasGraphicalSession = true;
+            displayType = "GUI";
+        }
+        pclose(pipe);
+    }
+
+    // Method 2: Check loginctl for graphical sessions
+    if (!hasGraphicalSession) {
+        pipe = popen("loginctl list-sessions --no-legend 2>/dev/null | head -1", "r");
+        if (pipe) {
+            char sessionId[64];
+            if (fgets(sessionId, sizeof(sessionId), pipe) != nullptr) {
+                pclose(pipe);
+                // Get session type
+                char cmd[256];
+                sscanf(sessionId, "%63s", sessionId); // Get first field (session ID)
+                snprintf(cmd, sizeof(cmd), "loginctl show-session %s -p Type --value 2>/dev/null", sessionId);
+                FILE* typePipe = popen(cmd, "r");
+                if (typePipe) {
+                    char type[32];
+                    if (fgets(type, sizeof(type), typePipe) != nullptr) {
+                        // Trim newline
+                        type[strcspn(type, "\n")] = 0;
+                        if (strcmp(type, "x11") == 0 || strcmp(type, "wayland") == 0) {
+                            hasGraphicalSession = true;
+                            displayType = type;
+                        }
+                    }
+                    pclose(typePipe);
+                }
+            } else {
+                pclose(pipe);
+            }
+        }
+    }
+
+    if (hasGraphicalSession) {
+        DisplayInfo di;
+        di.id = 1;
+        di.name = displayType;
+        di.width = 1920;
+        di.height = 1080;
+        di.x = 0;
+        di.y = 0;
+        di.scale = 1.0;
+        di.isPrimary = true;
+        di.isBuiltin = false;
+        displays.push_back(di);
+    }
+    // If no graphical session detected, return empty (headless system)
 #endif
 
     return displays;

@@ -2815,23 +2815,20 @@ static NSString * const kKeychainService = @"com.screencontrol.agent.oauth";
     // When local settings are locked, disable certain UI elements
     if (locked) {
         // Disable General tab settings
-        if (self.controlServerTextField) {
-            self.controlServerTextField.enabled = NO;
+        if (self.controlServerAddressField) {
+            self.controlServerAddressField.enabled = NO;
         }
 
-        // Disable Tools tab
-        if (self.toolsTabView) {
-            // Disable all checkboxes in tools config
-            for (NSString *categoryId in self.categoryToggles) {
-                NSButton *toggle = self.categoryToggles[categoryId];
+        // Disable Tools tab checkboxes
+        for (NSString *categoryId in self.categoryToggles) {
+            NSButton *toggle = self.categoryToggles[categoryId];
+            toggle.enabled = NO;
+        }
+        for (NSString *categoryId in self.toolToggles) {
+            NSDictionary *tools = self.toolToggles[categoryId];
+            for (NSString *toolName in tools) {
+                NSButton *toggle = tools[toolName];
                 toggle.enabled = NO;
-            }
-            for (NSString *categoryId in self.toolToggles) {
-                NSDictionary *tools = self.toolToggles[categoryId];
-                for (NSString *toolName in tools) {
-                    NSButton *toggle = tools[toolName];
-                    toggle.enabled = NO;
-                }
             }
         }
 
@@ -2841,22 +2838,20 @@ static NSString * const kKeychainService = @"com.screencontrol.agent.oauth";
         NSLog(@"[AppDelegate] Settings locked by administrator");
     } else {
         // Enable General tab settings
-        if (self.controlServerTextField) {
-            self.controlServerTextField.enabled = YES;
+        if (self.controlServerAddressField) {
+            self.controlServerAddressField.enabled = YES;
         }
 
-        // Enable Tools tab
-        if (self.toolsTabView) {
-            for (NSString *categoryId in self.categoryToggles) {
-                NSButton *toggle = self.categoryToggles[categoryId];
+        // Enable Tools tab checkboxes
+        for (NSString *categoryId in self.categoryToggles) {
+            NSButton *toggle = self.categoryToggles[categoryId];
+            toggle.enabled = YES;
+        }
+        for (NSString *categoryId in self.toolToggles) {
+            NSDictionary *tools = self.toolToggles[categoryId];
+            for (NSString *toolName in tools) {
+                NSButton *toggle = tools[toolName];
                 toggle.enabled = YES;
-            }
-            for (NSString *categoryId in self.toolToggles) {
-                NSDictionary *tools = self.toolToggles[categoryId];
-                for (NSString *toolName in tools) {
-                    NSButton *toggle = tools[toolName];
-                    toggle.enabled = YES;
-                }
             }
         }
 

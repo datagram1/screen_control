@@ -1,5 +1,9 @@
 name: Quality Checks
 
+# This workflow runs quality checks only - builds are done locally
+# Platform builds have been removed to reduce GitHub Actions costs
+# and because builds are now done on local self-hosted infrastructure
+
 on:
   push:
     branches: [ main, master ]
@@ -7,176 +11,6 @@ on:
     branches: [ main, master ]
 
 jobs:
-  # ============================================
-  # macOS Agent Build Check
-  # ============================================
-  macos-build:
-    name: macOS Agent Build
-    runs-on: macos-14
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Setup Xcode
-      uses: maxim-lobanov/setup-xcode@v1
-      with:
-        xcode-version: latest-stable
-
-    - name: Build Debug Agent
-      working-directory: macos
-      run: |
-        xcodebuild -project ScreenControl.xcodeproj \
-          -scheme ScreenControl \
-          -configuration Debug \
-          -derivedDataPath build \
-          CODE_SIGN_IDENTITY="-" \
-          CODE_SIGNING_REQUIRED=NO \
-          build
-
-    - name: Verify Debug Build
-      working-directory: macos
-      run: |
-        if [ -f "build/Build/Products/Debug/ScreenControl.app/Contents/MacOS/ScreenControl" ]; then
-          echo "✅ Debug build successful"
-        else
-          echo "❌ Debug build failed"
-          exit 1
-        fi
-
-  # ============================================
-  # macOS Service Build Check
-  # ============================================
-  macos-service-build:
-    name: macOS Service Build
-    runs-on: macos-14
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Install dependencies
-      run: brew install openssl@3
-
-    - name: Build Service
-      working-directory: service
-      run: |
-        mkdir -p build && cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release \
-          -DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)
-        make -j$(sysctl -n hw.ncpu)
-
-    - name: Verify Build
-      run: |
-        if [ -f "service/build/bin/ScreenControlService" ]; then
-          echo "✅ macOS service build successful"
-        else
-          echo "❌ macOS service build failed"
-          exit 1
-        fi
-
-  # ============================================
-  # C++ Service Build Check (Linux)
-  # ============================================
-  linux-service-build:
-    name: Linux Service Build
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake build-essential pkg-config \
-          libx11-dev libxrandr-dev libxtst-dev libpng-dev \
-          libssl-dev libsecret-1-dev
-
-    - name: Build Service
-      working-directory: service
-      run: |
-        mkdir -p build && cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release
-        make -j$(nproc)
-
-    - name: Verify Build
-      run: |
-        if [ -f "service/build/bin/ScreenControlService" ]; then
-          echo "✅ Linux service build successful"
-        else
-          echo "❌ Linux service build failed"
-          find service/build -name "ScreenControl*" -type f 2>/dev/null || true
-          exit 1
-        fi
-
-  # ============================================
-  # Windows Service Build Check
-  # ============================================
-  windows-service-build:
-    name: Windows Service Build
-    runs-on: windows-latest
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Setup MSVC
-      uses: ilammy/msvc-dev-cmd@v1
-      with:
-        arch: x64
-
-    - name: Build Service
-      working-directory: service
-      run: |
-        mkdir build
-        cd build
-        cmake .. -G "Visual Studio 17 2022" -A x64
-        cmake --build . --config Release
-
-    - name: Verify Build
-      shell: pwsh
-      run: |
-        $exe = "service/build/bin/Release/ScreenControlService.exe"
-        if (Test-Path $exe) {
-          Write-Host "✅ Windows service build successful"
-        } else {
-          Write-Host "❌ Windows service build failed"
-          exit 1
-        }
-
-  # ============================================
-  # Windows Tray App Build Check
-  # ============================================
-  windows-tray-build:
-    name: Windows Tray App Build
-    runs-on: windows-latest
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: '8.0.x'
-
-    - name: Build Tray App
-      working-directory: windows/ScreenControlTray
-      run: |
-        dotnet restore
-        dotnet build -c Release
-
-    - name: Verify Build
-      shell: pwsh
-      run: |
-        if (Test-Path "windows/ScreenControlTray/bin/Release") {
-          Write-Host "✅ Windows tray app build successful"
-        } else {
-          Write-Host "❌ Windows tray app build failed"
-          exit 1
-        }
-
   # ============================================
   # Code Quality Checks
   # ============================================
@@ -194,13 +28,13 @@ jobs:
         SENSITIVE_PATTERNS=("api[_-]?key\s*=" "password\s*=" "secret\s*=" "private[_-]?key")
         FOUND=0
         for pattern in "${SENSITIVE_PATTERNS[@]}"; do
-          if grep -r -i -E "$pattern" --include="*.cpp" --include="*.h" --include="*.m" --include="*.swift" . 2>/dev/null | grep -v "node_modules" | grep -v ".git" | grep -v "// example" | head -5; then
-            echo "⚠️ Potential sensitive data found with pattern: $pattern"
+          if grep -r -i -E "$pattern" --include="*.cpp" --include="*.h" --include="*.m" --include="*.swift" --include="*.cs" . 2>/dev/null | grep -v "node_modules" | grep -v ".git" | grep -v "// example" | head -5; then
+            echo "Warning: Potential sensitive data found with pattern: $pattern"
             FOUND=1
           fi
         done
         if [ $FOUND -eq 0 ]; then
-          echo "✅ No obvious sensitive data patterns found"
+          echo "No obvious sensitive data patterns found"
         fi
 
     - name: Check file permissions
@@ -208,11 +42,16 @@ jobs:
         echo "Checking build scripts are executable..."
         if [ -f "build-all.sh" ]; then
           if [ -x "build-all.sh" ]; then
-            echo "✅ build-all.sh is executable"
+            echo "build-all.sh is executable"
           else
-            echo "⚠️ build-all.sh is not executable"
+            echo "Warning: build-all.sh is not executable"
           fi
         fi
+
+    - name: Check for large files
+      run: |
+        echo "Checking for large files (>10MB)..."
+        find . -type f -size +10M -not -path "./.git/*" -not -path "./node_modules/*" -not -path "*/node_modules/*" 2>/dev/null | head -10 || echo "No large files found"
 
   # ============================================
   # Documentation Check
@@ -228,9 +67,9 @@ jobs:
     - name: Check README exists
       run: |
         if [ -f "README.md" ]; then
-          echo "✅ README.md exists"
+          echo "README.md exists"
         else
-          echo "❌ README.md not found"
+          echo "README.md not found"
           exit 1
         fi
 
@@ -239,8 +78,43 @@ jobs:
         echo "Checking documentation..."
         for doc in "service/docs" "macos/ScreenControl"; do
           if [ -d "$doc" ] || [ -f "$doc" ]; then
-            echo "✅ $doc exists"
+            echo "$doc exists"
           else
-            echo "⚠️ $doc not found (optional)"
+            echo "$doc not found (optional)"
+          fi
+        done
+
+  # ============================================
+  # Syntax Validation
+  # ============================================
+  syntax-check:
+    name: Syntax Validation
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Validate JSON files
+      run: |
+        echo "Validating JSON files..."
+        find . -name "*.json" -not -path "./node_modules/*" -not -path "*/node_modules/*" -not -path "./.git/*" | while read file; do
+          if python3 -m json.tool "$file" > /dev/null 2>&1; then
+            echo "Valid: $file"
+          else
+            echo "Invalid JSON: $file"
+          fi
+        done | grep -c "Invalid" && exit 1 || true
+
+    - name: Validate YAML files
+      run: |
+        echo "Validating YAML workflow files..."
+        for file in .github/workflows/*.yml .github/workflows/*.yaml; do
+          if [ -f "$file" ]; then
+            if python3 -c "import yaml; yaml.safe_load(open('$file'))" 2>/dev/null; then
+              echo "Valid: $file"
+            else
+              echo "Invalid YAML: $file"
+            fi
           fi
         done

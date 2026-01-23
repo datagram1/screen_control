@@ -19,7 +19,20 @@
 #if PLATFORM_WINDOWS
     #include <windows.h>
     #include <winhttp.h>
+    #include <bcrypt.h>
+    #include <iomanip>
+    #include <algorithm>  // For std::min
     #pragma comment(lib, "winhttp.lib")
+    #pragma comment(lib, "bcrypt.lib")
+
+    // Helper to convert narrow string to wide string
+    static std::wstring toWideString(const std::string& str) {
+        if (str.empty()) return std::wstring();
+        int size = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, nullptr, 0);
+        std::wstring result(size - 1, 0);
+        MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, &result[0], size);
+        return result;
+    }
 #else
     #include <curl/curl.h>
     #include <openssl/sha.h>
@@ -101,6 +114,18 @@ void UpdateManager::onHeartbeat(int updateFlag)
 
     m_heartbeatCount = 0;
 
+    // Check if we should reset from FAILED state after timeout
+    if (m_status == UpdateStatus::FAILED)
+    {
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - m_failedTimestamp).count();
+        if (elapsed >= m_config.failedRetryTimeoutSeconds)
+        {
+            log("Resetting from FAILED state after " + std::to_string(elapsed) + "s timeout");
+            m_status = UpdateStatus::IDLE;
+        }
+    }
+
     // If server signals update available, check for it
     if (updateFlag > 0)
     {
@@ -161,6 +186,7 @@ void UpdateManager::checkForUpdate()
         {
             log("Failed to check for updates");
             m_status = UpdateStatus::FAILED;
+            m_failedTimestamp = std::chrono::steady_clock::now();
             if (m_statusCallback)
             {
                 m_statusCallback(m_status, "Failed to check for updates");
@@ -215,6 +241,7 @@ void UpdateManager::checkForUpdate()
         {
             log("Failed to parse update response: " + std::string(e.what()));
             m_status = UpdateStatus::FAILED;
+            m_failedTimestamp = std::chrono::steady_clock::now();
             if (m_statusCallback)
             {
                 m_statusCallback(m_status, "Failed to parse update info");
@@ -277,6 +304,7 @@ void UpdateManager::downloadUpdate()
         {
             log("Download failed or cancelled");
             m_status = UpdateStatus::FAILED;
+            m_failedTimestamp = std::chrono::steady_clock::now();
             if (m_statusCallback)
             {
                 m_statusCallback(m_status, m_cancelDownload ? "Download cancelled" : "Download failed");
@@ -290,6 +318,7 @@ void UpdateManager::downloadUpdate()
         {
             log("Checksum verification failed!");
             m_status = UpdateStatus::FAILED;
+            m_failedTimestamp = std::chrono::steady_clock::now();
             if (m_statusCallback)
             {
                 m_statusCallback(m_status, "Checksum verification failed");
@@ -343,6 +372,7 @@ void UpdateManager::applyUpdate()
     {
         log("Update installation failed");
         m_status = UpdateStatus::FAILED;
+        m_failedTimestamp = std::chrono::steady_clock::now();
         if (m_statusCallback)
         {
             m_statusCallback(m_status, "Installation failed");
@@ -404,17 +434,19 @@ std::string UpdateManager::getInstallDir()
 bool UpdateManager::httpGet(const std::string& url, std::string& response)
 {
 #if PLATFORM_WINDOWS
-    // Windows HTTP implementation using WinHTTP
-    URL_COMPONENTSA urlComp = {0};
-    urlComp.dwStructSize = sizeof(urlComp);
-    char hostName[256] = {0};
-    char urlPath[1024] = {0};
-    urlComp.lpszHostName = hostName;
-    urlComp.dwHostNameLength = sizeof(hostName);
-    urlComp.lpszUrlPath = urlPath;
-    urlComp.dwUrlPathLength = sizeof(urlPath);
+    // Windows HTTP implementation using WinHTTP (wide string version)
+    std::wstring wUrl = toWideString(url);
 
-    if (!WinHttpCrackUrl(url.c_str(), 0, 0, &urlComp))
+    URL_COMPONENTS urlComp = {0};
+    urlComp.dwStructSize = sizeof(urlComp);
+    wchar_t hostName[256] = {0};
+    wchar_t urlPath[1024] = {0};
+    urlComp.lpszHostName = hostName;
+    urlComp.dwHostNameLength = sizeof(hostName) / sizeof(wchar_t);
+    urlComp.lpszUrlPath = urlPath;
+    urlComp.dwUrlPathLength = sizeof(urlPath) / sizeof(wchar_t);
+
+    if (!WinHttpCrackUrl(wUrl.c_str(), 0, 0, &urlComp))
     {
         return false;
     }
@@ -423,8 +455,7 @@ bool UpdateManager::httpGet(const std::string& url, std::string& response)
                                      WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return false;
 
-    HINTERNET hConnect = WinHttpConnect(hSession, std::wstring(hostName, hostName + strlen(hostName)).c_str(),
-                                        urlComp.nPort, 0);
+    HINTERNET hConnect = WinHttpConnect(hSession, hostName, urlComp.nPort, 0);
     if (!hConnect)
     {
         WinHttpCloseHandle(hSession);
@@ -432,8 +463,7 @@ bool UpdateManager::httpGet(const std::string& url, std::string& response)
     }
 
     DWORD flags = urlComp.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0;
-    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET",
-                                            std::wstring(urlPath, urlPath + strlen(urlPath)).c_str(),
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", urlPath,
                                             NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
     if (!hRequest)
     {
@@ -517,9 +547,117 @@ bool UpdateManager::httpDownload(const std::string& url, const std::string& dest
                                   std::function<void(uint64_t, uint64_t)> progressCallback)
 {
 #if PLATFORM_WINDOWS
-    // Similar to httpGet but write to file
-    // ... (implementation similar to above with file writing)
-    return false;  // TODO: Implement Windows download
+    // Windows HTTP download implementation using WinHTTP (wide string version)
+    std::wstring wUrl = toWideString(url);
+
+    URL_COMPONENTS urlComp = {0};
+    urlComp.dwStructSize = sizeof(urlComp);
+    wchar_t hostName[256] = {0};
+    wchar_t urlPath[2048] = {0};
+    urlComp.lpszHostName = hostName;
+    urlComp.dwHostNameLength = sizeof(hostName) / sizeof(wchar_t);
+    urlComp.lpszUrlPath = urlPath;
+    urlComp.dwUrlPathLength = sizeof(urlPath) / sizeof(wchar_t);
+
+    if (!WinHttpCrackUrl(wUrl.c_str(), 0, 0, &urlComp))
+    {
+        log("Failed to parse download URL");
+        return false;
+    }
+
+    HINTERNET hSession = WinHttpOpen(L"ScreenControl/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession)
+    {
+        log("WinHttpOpen failed");
+        return false;
+    }
+
+    HINTERNET hConnect = WinHttpConnect(hSession, hostName, urlComp.nPort, 0);
+    if (!hConnect)
+    {
+        WinHttpCloseHandle(hSession);
+        log("WinHttpConnect failed");
+        return false;
+    }
+
+    DWORD flags = urlComp.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0;
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", urlPath,
+                                            NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+    if (!hRequest)
+    {
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        log("WinHttpOpenRequest failed");
+        return false;
+    }
+
+    // Send request
+    if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+        !WinHttpReceiveResponse(hRequest, NULL))
+    {
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        log("Failed to send/receive HTTP request");
+        return false;
+    }
+
+    // Get content length
+    DWORD contentLengthSize = sizeof(DWORD);
+    DWORD contentLength = 0;
+    WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER,
+                        WINHTTP_HEADER_NAME_BY_INDEX, &contentLength, &contentLengthSize, WINHTTP_NO_HEADER_INDEX);
+
+    // Open output file
+    std::ofstream file(destPath, std::ios::binary);
+    if (!file.is_open())
+    {
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        log("Failed to open output file: " + destPath);
+        return false;
+    }
+
+    // Download data
+    uint64_t totalDownloaded = 0;
+    DWORD bytesAvailable;
+    std::vector<char> buffer(65536);  // 64KB buffer
+
+    while (WinHttpQueryDataAvailable(hRequest, &bytesAvailable) && bytesAvailable > 0)
+    {
+        if (m_cancelDownload)
+        {
+            file.close();
+            WinHttpCloseHandle(hRequest);
+            WinHttpCloseHandle(hConnect);
+            WinHttpCloseHandle(hSession);
+            return false;
+        }
+
+        DWORD bytesToRead = std::min(bytesAvailable, static_cast<DWORD>(buffer.size()));
+        DWORD bytesRead;
+        if (WinHttpReadData(hRequest, buffer.data(), bytesToRead, &bytesRead))
+        {
+            file.write(buffer.data(), bytesRead);
+            totalDownloaded += bytesRead;
+
+            if (progressCallback)
+            {
+                uint64_t total = contentLength > 0 ? static_cast<uint64_t>(contentLength) : m_totalSize.load();
+                progressCallback(totalDownloaded, total);
+            }
+        }
+    }
+
+    file.close();
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+
+    log("Download complete: " + std::to_string(totalDownloaded) + " bytes");
+    return true;
 #else
     CURL* curl = curl_easy_init();
     if (!curl) return false;
@@ -588,9 +726,97 @@ bool UpdateManager::verifyChecksum(const std::string& filepath, const std::strin
     }
 
 #if PLATFORM_WINDOWS
-    // Windows SHA256 implementation using CryptoAPI
-    // TODO: Implement Windows checksum
-    return true;
+    // Windows SHA256 implementation using BCrypt
+    BCRYPT_ALG_HANDLE hAlg = NULL;
+    BCRYPT_HASH_HANDLE hHash = NULL;
+    DWORD cbData = 0, cbHash = 0, cbHashObject = 0;
+    PBYTE pbHashObject = NULL;
+    PBYTE pbHash = NULL;
+    bool result = false;
+
+    // Open file
+    std::ifstream file(filepath, std::ios::binary);
+    if (!file.is_open())
+    {
+        log("Cannot open file for checksum: " + filepath);
+        return false;
+    }
+
+    // Open algorithm provider
+    if (BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SHA256_ALGORITHM, NULL, 0) != 0)
+    {
+        log("BCryptOpenAlgorithmProvider failed");
+        return false;
+    }
+
+    // Get hash object size
+    if (BCryptGetProperty(hAlg, BCRYPT_OBJECT_LENGTH, (PBYTE)&cbHashObject, sizeof(DWORD), &cbData, 0) != 0)
+    {
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+        return false;
+    }
+
+    // Get hash size
+    if (BCryptGetProperty(hAlg, BCRYPT_HASH_LENGTH, (PBYTE)&cbHash, sizeof(DWORD), &cbData, 0) != 0)
+    {
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+        return false;
+    }
+
+    // Allocate hash object
+    pbHashObject = (PBYTE)HeapAlloc(GetProcessHeap(), 0, cbHashObject);
+    pbHash = (PBYTE)HeapAlloc(GetProcessHeap(), 0, cbHash);
+    if (!pbHashObject || !pbHash)
+    {
+        if (pbHashObject) HeapFree(GetProcessHeap(), 0, pbHashObject);
+        if (pbHash) HeapFree(GetProcessHeap(), 0, pbHash);
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+        return false;
+    }
+
+    // Create hash
+    if (BCryptCreateHash(hAlg, &hHash, pbHashObject, cbHashObject, NULL, 0, 0) != 0)
+    {
+        HeapFree(GetProcessHeap(), 0, pbHashObject);
+        HeapFree(GetProcessHeap(), 0, pbHash);
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+        return false;
+    }
+
+    // Hash the file
+    char buffer[8192];
+    while (file.read(buffer, sizeof(buffer)) || file.gcount() > 0)
+    {
+        BCryptHashData(hHash, (PBYTE)buffer, static_cast<ULONG>(file.gcount()), 0);
+    }
+    file.close();
+
+    // Finish hash
+    if (BCryptFinishHash(hHash, pbHash, cbHash, 0) == 0)
+    {
+        // Convert to hex string
+        std::stringstream ss;
+        for (DWORD i = 0; i < cbHash; i++)
+        {
+            ss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(pbHash[i]);
+        }
+
+        std::string calculatedHash = ss.str();
+        result = (calculatedHash == expectedSha256);
+
+        if (!result)
+        {
+            log("Checksum mismatch: expected " + expectedSha256 + ", got " + calculatedHash);
+        }
+    }
+
+    // Cleanup
+    BCryptDestroyHash(hHash);
+    HeapFree(GetProcessHeap(), 0, pbHashObject);
+    HeapFree(GetProcessHeap(), 0, pbHash);
+    BCryptCloseAlgorithmProvider(hAlg, 0);
+
+    return result;
 #else
     std::ifstream file(filepath, std::ios::binary);
     if (!file.is_open()) return false;

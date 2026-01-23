@@ -1,8 +1,15 @@
 {
   "mcpServers": {
     "screencontrol": {
-      "command": "/Applications/ScreenControl.app/Contents/MacOS/ScreenControl",
+      "command": "/Users/richardbrown/dev/screen_control/macos/build/Build/Products/Release/ScreenControl.app/Contents/MacOS/ScreenControl",
       "args": ["--mcp-stdio"]
+    },
+    "screencontrol-remote": {
+      "url": "https://screencontrol.knws.co.uk/mcp/cmivv9aar000310vcfp9lg0qj",
+      "transport": "sse",
+      "headers": {
+        "Authorization": "Bearer sc_at_q5io1LerscY9pPLd1d3IQA1jjXn_RSPrJmqAgrDUf-E"
+      }
     },
     "playwright": {
       "command": "npx",

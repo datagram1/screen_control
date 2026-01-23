@@ -93,11 +93,24 @@ bool UpdateManager::applyUpdateWindows()
         script << "powershell -Command \"Expand-Archive -Path '" << m_downloadPath << "' -DestinationPath '.' -Force\" >> \"%LOG_FILE%\" 2>&1\r\n\r\n";
 
         // Install new files
+        // Archive extracts to screencontrol/ subdirectory
         script << "echo Installing new files... >> \"%LOG_FILE%\"\r\n";
-        script << "if exist \"" << downloadDir << "\\ScreenControlService.exe\" (\r\n";
+        script << "set EXTRACT_DIR=" << downloadDir << "\\screencontrol\r\n";
+        script << "if exist \"%EXTRACT_DIR%\\ScreenControlService.exe\" (\r\n";
+        script << "    copy /Y \"%EXTRACT_DIR%\\ScreenControlService.exe\" \"" << installDir << "\\\" >> \"%LOG_FILE%\"\r\n";
+        script << "    echo Installed ScreenControlService.exe from subdirectory >> \"%LOG_FILE%\"\r\n";
+        script << ") else if exist \"" << downloadDir << "\\ScreenControlService.exe\" (\r\n";
         script << "    copy /Y \"" << downloadDir << "\\ScreenControlService.exe\" \"" << installDir << "\\\" >> \"%LOG_FILE%\"\r\n";
+        script << "    echo Installed ScreenControlService.exe from flat >> \"%LOG_FILE%\"\r\n";
+        script << ") else (\r\n";
+        script << "    echo ERROR: ScreenControlService.exe not found! >> \"%LOG_FILE%\"\r\n";
+        script << "    dir \"" << downloadDir << "\" >> \"%LOG_FILE%\"\r\n";
+        script << "    dir \"%EXTRACT_DIR%\" 2>nul >> \"%LOG_FILE%\"\r\n";
+        script << "    exit /b 1\r\n";
         script << ")\r\n";
-        script << "if exist \"" << downloadDir << "\\ScreenControlTray.exe\" (\r\n";
+        script << "if exist \"%EXTRACT_DIR%\\ScreenControlTray.exe\" (\r\n";
+        script << "    copy /Y \"%EXTRACT_DIR%\\ScreenControlTray.exe\" \"" << installDir << "\\\" >> \"%LOG_FILE%\"\r\n";
+        script << ") else if exist \"" << downloadDir << "\\ScreenControlTray.exe\" (\r\n";
         script << "    copy /Y \"" << downloadDir << "\\ScreenControlTray.exe\" \"" << installDir << "\\\" >> \"%LOG_FILE%\"\r\n";
         script << ")\r\n\r\n";
 

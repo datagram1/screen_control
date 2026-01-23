@@ -33,6 +33,7 @@ struct UpdateConfig
     bool autoDownload = true;
     bool autoInstall = false;
     int checkIntervalHeartbeats = 60;  // Check every N heartbeats (60 * 5s = ~5 mins)
+    int failedRetryTimeoutSeconds = 600;  // Retry after 10 minutes if in FAILED state
 };
 
 // Update status
@@ -123,6 +124,7 @@ private:
 
     // State
     std::atomic<UpdateStatus> m_status{UpdateStatus::IDLE};
+    std::chrono::steady_clock::time_point m_failedTimestamp;
     UpdateInfo m_updateInfo;
     std::string m_downloadPath;
     std::atomic<uint64_t> m_downloaded{0};

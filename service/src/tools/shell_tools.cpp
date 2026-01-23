@@ -20,10 +20,17 @@
     #include <unistd.h>
     #include <sys/wait.h>
     #include <sys/select.h>
+    #include <sys/ioctl.h>
     #include <signal.h>
     #include <fcntl.h>
     #include <cstring>
     #include <cerrno>
+    #include <termios.h>
+    #if defined(__APPLE__)
+        #include <util.h>
+    #else
+        #include <pty.h>
+    #endif
 #endif
 
 using json = nlohmann::json;
@@ -71,6 +78,8 @@ struct ShellSession
     int stdinFd;
     int stdoutFd;
     int stderrFd;
+    int ptyMasterFd;  // PTY master fd (if using PTY)
+    bool isPty;       // true if this is a PTY session
 };
 #endif
 
@@ -434,71 +443,85 @@ json ShellTools::startSession(const std::string& command, const std::string& cwd
     };
 
 #else
-    int stdinPipe[2];
-    int stdoutPipe[2];
-    int stderrPipe[2];
+    // Use PTY for interactive shell sessions
+    int masterFd;
+    struct winsize ws = {24, 80, 0, 0};  // Default 80x24 terminal
 
-    if (pipe(stdinPipe) < 0 || pipe(stdoutPipe) < 0 || pipe(stderrPipe) < 0)
-    {
-        return {{"success", false}, {"error", "Failed to create pipes"}};
-    }
-
-    pid_t pid = fork();
+    pid_t pid = forkpty(&masterFd, nullptr, nullptr, &ws);
 
     if (pid < 0)
     {
-        close(stdinPipe[0]); close(stdinPipe[1]);
-        close(stdoutPipe[0]); close(stdoutPipe[1]);
-        close(stderrPipe[0]); close(stderrPipe[1]);
-        return {{"success", false}, {"error", "Failed to fork"}};
+        return {{"success", false}, {"error", "Failed to create PTY: " + std::string(strerror(errno))}};
     }
 
     if (pid == 0)
     {
-        // Child process
-        close(stdinPipe[1]);
-        close(stdoutPipe[0]);
-        close(stderrPipe[0]);
-
-        dup2(stdinPipe[0], STDIN_FILENO);
-        dup2(stdoutPipe[1], STDOUT_FILENO);
-        dup2(stderrPipe[1], STDERR_FILENO);
-
-        close(stdinPipe[0]);
-        close(stdoutPipe[1]);
-        close(stderrPipe[1]);
-
+        // Child process - we're in a new PTY
         if (!cwd.empty())
         {
-            chdir(cwd.c_str());
+            if (chdir(cwd.c_str()) != 0)
+            {
+                // Ignore chdir errors, just stay in current directory
+            }
         }
 
-        // Run the shell directly instead of through sh -c
-        // This keeps the shell alive waiting for input
-        std::string shell = command.empty() ? "/bin/bash" : command;
+        // Set up environment for interactive shell
+        setenv("TERM", "xterm-256color", 1);
+        setenv("COLORTERM", "truecolor", 1);
 
-        // Check if it's a simple shell command or a full command line
-        if (shell == "/bin/bash" || shell == "/bin/sh" || shell == "bash" || shell == "sh")
+        // Get shell to run - try multiple paths for portability
+        std::string shell = command.empty() ? "bash" : command;
+
+        // Helper function to find an executable shell
+        auto findShell = [](const std::vector<std::string>& paths) -> const char* {
+            for (const auto& path : paths)
+            {
+                if (access(path.c_str(), X_OK) == 0)
+                {
+                    return strdup(path.c_str());  // Return accessible path
+                }
+            }
+            return nullptr;
+        };
+
+        const char* shellPath = nullptr;
+
+        if (shell == "/bin/bash" || shell == "bash")
         {
-            // Run shell directly
-            const char* shellPath = (shell == "bash" || shell == "/bin/bash") ? "/bin/bash" : "/bin/sh";
-            execl(shellPath, shellPath, "--norc", "--noprofile", nullptr);
+            // Try multiple bash locations (ARM Linux often has bash in /usr/bin)
+            shellPath = findShell({"/bin/bash", "/usr/bin/bash"});
+            if (!shellPath) shellPath = "/bin/bash";  // Fallback for error message
+        }
+        else if (shell == "/bin/sh" || shell == "sh")
+        {
+            shellPath = findShell({"/bin/sh", "/usr/bin/sh"});
+            if (!shellPath) shellPath = "/bin/sh";
+        }
+        else if (shell == "/bin/zsh" || shell == "zsh")
+        {
+            shellPath = findShell({"/bin/zsh", "/usr/bin/zsh"});
+            if (!shellPath) shellPath = "/bin/zsh";
         }
         else
         {
-            // Run command through sh
-            execl("/bin/sh", "sh", "-c", shell.c_str(), nullptr);
+            // Use provided path directly
+            shellPath = shell.c_str();
         }
+
+        // Run interactive shell (no --norc so we get proper PS1 prompt)
+        execl(shellPath, shellPath, "-i", nullptr);
+
+        // If execl fails, try with -l for login shell
+        execl(shellPath, shellPath, "-l", nullptr);
+
+        // If both fail, try /bin/sh as last resort
+        execl("/bin/sh", "sh", "-i", nullptr);
+
         _exit(127);
     }
 
     // Parent process
-    close(stdinPipe[0]);
-    close(stdoutPipe[1]);
-    close(stderrPipe[1]);
-
-    setNonBlocking(stdoutPipe[0]);
-    setNonBlocking(stderrPipe[0]);
+    setNonBlocking(masterFd);
 
     std::string sessionId = generateSessionId();
 
@@ -506,9 +529,11 @@ json ShellTools::startSession(const std::string& command, const std::string& cwd
         std::lock_guard<std::mutex> lock(g_sessionMutex);
         g_sessions[sessionId] = {
             pid,
-            stdinPipe[1],
-            stdoutPipe[0],
-            stderrPipe[0]
+            -1,  // stdinFd not used for PTY
+            -1,  // stdoutFd not used for PTY
+            -1,  // stderrFd not used for PTY
+            masterFd,
+            true  // isPty
         };
     }
 
@@ -539,7 +564,8 @@ json ShellTools::sendInput(const std::string& sessionId, const std::string& inpu
     }
     return {{"success", true}, {"session_id", sessionId}, {"bytes_written", static_cast<int>(written)}};
 #else
-    ssize_t written = write(it->second.stdinFd, input.c_str(), input.size());
+    int fd = it->second.isPty ? it->second.ptyMasterFd : it->second.stdinFd;
+    ssize_t written = write(fd, input.c_str(), input.size());
     if (written < 0)
     {
         return {{"success", false}, {"error", "Failed to write to session: " + std::string(strerror(errno))}};
@@ -586,9 +612,16 @@ json ShellTools::stopSession(const std::string& sessionId, const std::string& si
     int status;
     waitpid(it->second.pid, &status, WNOHANG);
 
-    close(it->second.stdinFd);
-    close(it->second.stdoutFd);
-    close(it->second.stderrFd);
+    if (it->second.isPty)
+    {
+        close(it->second.ptyMasterFd);
+    }
+    else
+    {
+        close(it->second.stdinFd);
+        close(it->second.stdoutFd);
+        close(it->second.stderrFd);
+    }
 #endif
 
     g_sessions.erase(it);
@@ -632,15 +665,27 @@ json ShellTools::readOutput(const std::string& sessionId)
     }
 #else
     ssize_t n;
-    while ((n = read(it->second.stdoutFd, buffer, sizeof(buffer) - 1)) > 0)
+    if (it->second.isPty)
     {
-        buffer[n] = '\0';
-        stdoutStr += buffer;
+        // PTY combines stdout and stderr into one stream
+        while ((n = read(it->second.ptyMasterFd, buffer, sizeof(buffer) - 1)) > 0)
+        {
+            buffer[n] = '\0';
+            stdoutStr += buffer;
+        }
     }
-    while ((n = read(it->second.stderrFd, buffer, sizeof(buffer) - 1)) > 0)
+    else
     {
-        buffer[n] = '\0';
-        stderrStr += buffer;
+        while ((n = read(it->second.stdoutFd, buffer, sizeof(buffer) - 1)) > 0)
+        {
+            buffer[n] = '\0';
+            stdoutStr += buffer;
+        }
+        while ((n = read(it->second.stderrFd, buffer, sizeof(buffer) - 1)) > 0)
+        {
+            buffer[n] = '\0';
+            stderrStr += buffer;
+        }
     }
 #endif
 

@@ -1,4 +1,8 @@
-name: CI/CD Pipeline
+name: CI Pipeline
+
+# This is a lightweight CI pipeline for code validation only
+# All platform builds are done locally on self-hosted infrastructure
+# This saves GitHub Actions costs (macOS/Windows runners are expensive)
 
 on:
   push:
@@ -15,580 +19,99 @@ on:
 
 jobs:
   # ============================================
-  # macOS Agent Build
+  # Code Validation
   # ============================================
-  build-macos-agent:
-    name: Build macOS Agent
-    runs-on: macos-14  # Apple Silicon runner
+  validate:
+    name: Validate Code
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
-
-      - name: Build Debug Agent
-        working-directory: macos
+      - name: Check for merge conflicts
         run: |
-          xcodebuild -project ScreenControl.xcodeproj \
-            -scheme ScreenControl \
-            -configuration Debug \
-            -derivedDataPath build \
-            CODE_SIGN_IDENTITY="-" \
-            CODE_SIGNING_REQUIRED=NO \
-            build
-
-      - name: Verify TestServer in Debug Build
-        working-directory: macos
-        run: |
-          if nm build/Build/Products/Debug/ScreenControl.app/Contents/MacOS/ScreenControl | grep -q "TestServer"; then
-            echo "✓ TestServer compiled into debug build"
-          else
-            echo "✗ FAIL: TestServer NOT found in debug build"
+          if grep -rn "<<<<<<< HEAD" --include="*.cpp" --include="*.h" --include="*.m" --include="*.swift" --include="*.cs" --include="*.ts" --include="*.tsx" . 2>/dev/null | grep -v node_modules; then
+            echo "Merge conflict markers found!"
             exit 1
           fi
+          echo "No merge conflicts found"
 
-      - name: Build Release Agent
-        working-directory: macos
+      - name: Check for debug statements
         run: |
-          xcodebuild -project ScreenControl.xcodeproj \
-            -scheme ScreenControl \
-            -configuration Release \
-            -derivedDataPath build \
-            CODE_SIGN_IDENTITY="-" \
-            CODE_SIGNING_REQUIRED=NO \
-            build
+          echo "Checking for common debug statements that should be removed..."
+          # Just warn, don't fail
+          grep -rn "console\.log\|debugger\|TODO:" --include="*.ts" --include="*.tsx" . 2>/dev/null | grep -v node_modules | head -10 || true
 
-      - name: Verify TestServer NOT in Release Build
-        working-directory: macos
+      - name: Validate version.json
         run: |
-          if nm build/Build/Products/Release/ScreenControl.app/Contents/MacOS/ScreenControl 2>/dev/null | grep -q "TestServer"; then
-            echo "✗ SECURITY FAIL: TestServer found in release build!"
-            exit 1
-          else
-            echo "✓ TestServer correctly excluded from release build"
+          if [ -f "version.json" ]; then
+            python3 -m json.tool version.json > /dev/null && echo "version.json is valid" || exit 1
           fi
 
-      - name: Upload Debug Build
-        uses: actions/upload-artifact@v4
-        with:
-          name: ScreenControl-Debug-macOS
-          path: macos/build/Build/Products/Debug/ScreenControl.app
-          retention-days: 7
-
-      - name: Upload Release Build
-        uses: actions/upload-artifact@v4
-        with:
-          name: ScreenControl-Release-macOS
-          path: macos/build/Build/Products/Release/ScreenControl.app
-          retention-days: 30
-
   # ============================================
-  # macOS Installer (.pkg) - Signed
+  # Security Scan
   # ============================================
-  build-macos-pkg:
-    name: Build macOS Installer
-    runs-on: macos-14
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
-
-      - name: Install dependencies
-        run: brew install openssl@3
-
-      - name: Import signing certificates
-        id: import-certs
-        env:
-          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
-          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      - name: Check for hardcoded secrets
         run: |
-          # Skip if no certificate configured
-          if [ -z "$MACOS_CERTIFICATE" ]; then
-            echo "No signing certificate configured, skipping..."
-            echo "KEYCHAIN_PATH=" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # Create variables
-          CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
-          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
-
-          # Export keychain path for subsequent steps
-          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_OUTPUT
-
-          # Import certificate from secrets
-          echo -n "$MACOS_CERTIFICATE" | base64 --decode -o $CERTIFICATE_PATH
-
-          # Create temporary keychain
-          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-
-          # Import certificate to keychain
-          security import $CERTIFICATE_PATH -P "$MACOS_CERTIFICATE_PWD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
-          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-
-          # Set this keychain as the default for the user (this persists across steps)
-          security default-keychain -s $KEYCHAIN_PATH
-
-          # Add keychain to search list (prepend to ensure it's searched first)
-          security list-keychain -d user -s $KEYCHAIN_PATH $(security list-keychain -d user | tr -d '"')
-
-          # Verify certificates imported and check what's available
-          echo "Verifying certificates..."
-          security find-identity -v -p codesigning $KEYCHAIN_PATH
-          security find-identity -v $KEYCHAIN_PATH
-
-          # Check for Developer ID Application certificate (for codesigning)
-          if security find-identity -v -p codesigning $KEYCHAIN_PATH | grep -q "Developer ID Application"; then
-            echo "HAS_APP_CERT=true" >> $GITHUB_OUTPUT
-            echo "✅ Developer ID Application certificate found"
-          else
-            echo "HAS_APP_CERT=false" >> $GITHUB_OUTPUT
-            echo "⚠️ Developer ID Application certificate NOT found - app signing disabled"
-          fi
-
-          # Check for Developer ID Installer certificate (for pkg signing)
-          if security find-identity -v $KEYCHAIN_PATH | grep -q "Developer ID Installer"; then
-            echo "HAS_INSTALLER_CERT=true" >> $GITHUB_OUTPUT
-            echo "✅ Developer ID Installer certificate found"
-          else
-            echo "HAS_INSTALLER_CERT=false" >> $GITHUB_OUTPUT
-            echo "⚠️ Developer ID Installer certificate NOT found"
-          fi
-
-      - name: Build and sign pkg installer
-        working-directory: service/install/macos/pkg
-        env:
-          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
-          OPENSSL_ROOT_DIR: /opt/homebrew/opt/openssl@3
-          SIGNING_KEYCHAIN: ${{ steps.import-certs.outputs.KEYCHAIN_PATH }}
-          HAS_APP_CERT: ${{ steps.import-certs.outputs.HAS_APP_CERT }}
-          HAS_INSTALLER_CERT: ${{ steps.import-certs.outputs.HAS_INSTALLER_CERT }}
-        run: |
-          chmod +x build_pkg.sh
-
-          # Build argument list based on available certificates
-          BUILD_ARGS="--version 1.2.0"
-
-          if [ "$HAS_INSTALLER_CERT" = "true" ]; then
-            echo "✅ Will sign installer with Developer ID Installer"
-            BUILD_ARGS="$BUILD_ARGS --sign \"Developer ID Installer: Key Network Services Ltd (LZ7T6LSFQ5)\""
-          fi
-
-          if [ "$HAS_APP_CERT" = "true" ]; then
-            echo "✅ Will sign apps with Developer ID Application"
-            BUILD_ARGS="$BUILD_ARGS --app-sign \"Developer ID Application: Key Network Services Ltd (LZ7T6LSFQ5)\""
-          else
-            echo "⚠️ Skipping app code signing (no Developer ID Application certificate)"
-          fi
-
-          if [ -n "$SIGNING_KEYCHAIN" ]; then
-            BUILD_ARGS="$BUILD_ARGS --keychain \"$SIGNING_KEYCHAIN\""
-          fi
-
-          echo "Running: ./build_pkg.sh $BUILD_ARGS"
-          eval "./build_pkg.sh $BUILD_ARGS"
-
-      - name: Notarize pkg
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-          HAS_APP_CERT: ${{ steps.import-certs.outputs.HAS_APP_CERT }}
-        run: |
-          # Skip if notarization credentials not configured
-          if [ -z "$APPLE_ID" ]; then
-            echo "No notarization credentials configured, skipping..."
-            exit 0
-          fi
-
-          # Warn if apps weren't signed (notarization will fail)
-          if [ "$HAS_APP_CERT" != "true" ]; then
-            echo "⚠️ WARNING: Apps were not code-signed (no Developer ID Application cert)"
-            echo "⚠️ Notarization requires all code to be signed - this will likely fail"
-            echo "⚠️ To fix: export both Developer ID Application AND Installer certs to .p12"
-          fi
-
-          PKG_PATH="service/install/macos/pkg/output/ScreenControl-1.2.0.pkg"
-          if [ -f "$PKG_PATH" ]; then
-            echo "Submitting for notarization..."
-            xcrun notarytool submit "$PKG_PATH" \
-              --apple-id "$APPLE_ID" \
-              --team-id "$APPLE_TEAM_ID" \
-              --password "$APPLE_APP_PASSWORD" \
-              --wait || {
-                echo "❌ Notarization failed. If apps weren't signed, this is expected."
-                echo "To enable notarization, export both certificates to your .p12 file."
-                exit 0  # Don't fail the build, just warn
-              }
-
-            echo "Stapling notarization ticket..."
-            xcrun stapler staple "$PKG_PATH"
-          fi
-
-      - name: Verify pkg
-        run: |
-          if [ -f "service/install/macos/pkg/output/ScreenControl-1.2.0.pkg" ]; then
-            echo "✅ macOS pkg build successful"
-            ls -la service/install/macos/pkg/output/
-            # Check if signed
-            pkgutil --check-signature service/install/macos/pkg/output/ScreenControl-1.2.0.pkg || true
-          else
-            echo "❌ macOS pkg build failed"
-            exit 1
-          fi
-
-      - name: Cleanup keychain
-        if: always()
-        run: |
-          security delete-keychain $RUNNER_TEMP/app-signing.keychain-db 2>/dev/null || true
-
-      - name: Upload macOS pkg
-        uses: actions/upload-artifact@v4
-        with:
-          name: ScreenControl-macOS-pkg
-          path: service/install/macos/pkg/output/*.pkg
-          retention-days: 30
-
-  # ============================================
-  # macOS Agent Integration Tests (via TestServer)
-  # Note: These tests require accessibility permissions which
-  # CI runners don't have. They're informational only.
-  # ============================================
-  test-macos-agent:
-    name: Test macOS Agent
-    runs-on: macos-14
-    needs: build-macos-agent
-    continue-on-error: true  # Don't fail the pipeline for permission issues
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download Debug Build
-        uses: actions/download-artifact@v4
-        with:
-          name: ScreenControl-Debug-macOS
-          path: agent/ScreenControl.app
-
-      - name: Make agent executable
-        run: chmod +x agent/ScreenControl.app/Contents/MacOS/ScreenControl
-
-      - name: Start Agent
-        run: |
-          open agent/ScreenControl.app
-          echo "Waiting for agent startup..."
-          sleep 5
-
-      - name: Wait for TestServer
-        run: |
-          echo "Waiting for TestServer to be ready..."
-          for i in {1..15}; do
-            if curl -s http://localhost:3456/ping 2>/dev/null | grep -q '"pong":true'; then
-              echo "✓ TestServer is ready"
-              exit 0
+          echo "Scanning for potential hardcoded secrets..."
+          # Look for common patterns that might indicate secrets
+          PATTERNS=(
+            'password\s*=\s*["\x27][^"\x27]+'
+            'api[_-]?key\s*=\s*["\x27][^"\x27]+'
+            'secret\s*=\s*["\x27][^"\x27]+'
+            'token\s*=\s*["\x27][^"\x27]+'
+          )
+          FOUND=0
+          for pattern in "${PATTERNS[@]}"; do
+            if grep -riE "$pattern" --include="*.cpp" --include="*.h" --include="*.cs" --include="*.ts" . 2>/dev/null | grep -v node_modules | grep -v "example" | grep -v "placeholder" | head -3; then
+              FOUND=1
             fi
-            echo "  Attempt $i/15..."
-            sleep 2
           done
-          echo "✗ TestServer failed to start"
-          exit 1
-
-      - name: Test ping endpoint
-        run: |
-          RESPONSE=$(curl -s http://localhost:3456/ping)
-          echo "Ping response: $RESPONSE"
-          if echo "$RESPONSE" | grep -q '"debug":true'; then
-            echo "✓ Confirmed debug build"
+          if [ $FOUND -eq 1 ]; then
+            echo "Warning: Potential secrets found. Please review."
           else
-            echo "✗ Not a debug build"
-            exit 1
+            echo "No obvious hardcoded secrets found"
           fi
 
-      - name: Test getState endpoint
+      - name: Check .env files not committed
         run: |
-          RESPONSE=$(curl -s -X POST http://localhost:3456 \
-            -H "Content-Type: application/json" \
-            -d '{"method": "getState"}')
-          echo "State response: $RESPONSE"
-          if echo "$RESPONSE" | grep -q '"connected"'; then
-            echo "✓ getState works correctly"
+          if find . -name ".env" -not -path "./node_modules/*" | grep -q .; then
+            echo "Warning: .env file(s) found in repository!"
+            find . -name ".env" -not -path "./node_modules/*"
           else
-            echo "✗ getState failed"
-            exit 1
+            echo "No .env files committed"
           fi
 
-      - name: Stop Agent
-        if: always()
-        run: |
-          curl -s -X POST http://localhost:3456 \
-            -H "Content-Type: application/json" \
-            -d '{"method": "quit"}' || true
-          sleep 2
-          echo "Agent stopped"
-
   # ============================================
-  # macOS Service Build (standalone C++ service)
+  # Status Summary
   # ============================================
-  build-macos-service:
-    name: Build macOS Service
-    runs-on: macos-14
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          brew install openssl@3
-
-      - name: Build Service with CMake
-        working-directory: service
-        run: |
-          mkdir -p build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release \
-            -DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)
-          make -j$(sysctl -n hw.ncpu)
-
-      - name: Verify Build
-        run: |
-          if [ -f "service/build/bin/ScreenControlService" ]; then
-            echo "✅ macOS service build successful"
-            ls -la service/build/bin/ScreenControlService
-          else
-            echo "❌ macOS service build failed"
-            find service/build -name "ScreenControl*" -type f 2>/dev/null || true
-            exit 1
-          fi
-
-      - name: Upload macOS Service
-        uses: actions/upload-artifact@v4
-        with:
-          name: ScreenControl-Service-macOS
-          path: service/build/bin/ScreenControlService
-          retention-days: 30
-
-  # ============================================
-  # Linux Service Build
-  # ============================================
-  build-linux-service:
-    name: Build Linux Service
+  status:
+    name: CI Status
     runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake build-essential pkg-config \
-            libx11-dev libxrandr-dev libxtst-dev libpng-dev \
-            libssl-dev libsecret-1-dev
-
-      - name: Build Service
-        working-directory: service
-        run: |
-          mkdir -p build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release
-          make -j$(nproc)
-
-      - name: Verify Build
-        run: |
-          if [ -f "service/build/bin/ScreenControlService" ]; then
-            echo "✅ Linux service build successful"
-            ls -la service/build/bin/ScreenControlService
-          else
-            echo "❌ Linux service build failed"
-            find service/build -name "ScreenControl*" -type f 2>/dev/null || true
-            exit 1
-          fi
-
-      - name: Upload Linux Build
-        uses: actions/upload-artifact@v4
-        with:
-          name: ScreenControl-Service-Linux
-          path: service/build/bin/ScreenControlService
-          retention-days: 30
-
-  # ============================================
-  # Windows Service Build
-  # ============================================
-  build-windows-service:
-    name: Build Windows Service
-    runs-on: windows-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup MSVC
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-
-      - name: Build Service with CMake
-        working-directory: service
-        run: |
-          mkdir build
-          cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
-          cmake --build . --config Release
-
-      - name: Verify Build
-        shell: pwsh
-        run: |
-          $exe = "service/build/bin/Release/ScreenControlService.exe"
-          if (Test-Path $exe) {
-            Write-Host "✅ Windows service build successful"
-            Get-Item $exe
-          } else {
-            Write-Host "❌ Windows service build failed"
-            Get-ChildItem -Recurse service/build -Filter "*.exe" | ForEach-Object { Write-Host $_.FullName }
-            exit 1
-          }
-
-      - name: Upload Windows Service
-        uses: actions/upload-artifact@v4
-        with:
-          name: ScreenControl-Service-Windows
-          path: service/build/bin/Release/ScreenControlService.exe
-          retention-days: 30
-
-  # ============================================
-  # Windows Tray App Build
-  # ============================================
-  build-windows-tray:
-    name: Build Windows Tray App
-    runs-on: windows-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
-
-      - name: Build Tray App
-        working-directory: windows/ScreenControlTray
-        run: |
-          dotnet restore
-          dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish
-
-      - name: Verify Build
-        shell: pwsh
-        run: |
-          $exe = "windows/ScreenControlTray/publish/ScreenControlTray.exe"
-          if (Test-Path $exe) {
-            Write-Host "✅ Windows tray app build successful"
-            Get-Item $exe
-          } else {
-            Write-Host "❌ Windows tray app build failed"
-            exit 1
-          }
-
-      - name: Upload Windows Tray App
-        uses: actions/upload-artifact@v4
-        with:
-          name: ScreenControl-Tray-Windows
-          path: windows/ScreenControlTray/publish/ScreenControlTray.exe
-          retention-days: 30
-
-  # ============================================
-  # Windows Credential Provider Build
-  # ============================================
-  build-windows-credential-provider:
-    name: Build Windows Credential Provider
-    runs-on: windows-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup MSVC
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-
-      - name: Build Credential Provider with CMake
-        working-directory: service/src/platform/windows/credential_provider
-        run: |
-          mkdir build
-          cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64
-          cmake --build . --config Release
-
-      - name: Verify Build
-        shell: pwsh
-        run: |
-          $dll = "service/src/platform/windows/credential_provider/build/bin/Release/ScreenControlCP.dll"
-          if (Test-Path $dll) {
-            Write-Host "✅ Windows credential provider build successful"
-            Get-Item $dll
-          } else {
-            Write-Host "❌ Windows credential provider build failed"
-            Get-ChildItem -Recurse service/src/platform/windows/credential_provider/build -Filter "*.dll" | ForEach-Object { Write-Host $_.FullName }
-            exit 1
-          }
-
-      - name: Upload Windows Credential Provider
-        uses: actions/upload-artifact@v4
-        with:
-          name: ScreenControl-CredentialProvider-Windows
-          path: service/src/platform/windows/credential_provider/build/bin/Release/ScreenControlCP.dll
-          retention-days: 30
-
-  # ============================================
-  # Status Check
-  # ============================================
-  status-check:
-    name: All Checks Passed
-    runs-on: ubuntu-latest
-    needs: [build-macos-agent, build-macos-service, build-macos-pkg, build-linux-service, build-windows-service, build-windows-tray, build-windows-credential-provider]
+    needs: [validate, security]
     if: always()
 
     steps:
-      - name: Check build status
+      - name: Check results
         run: |
-          if [ "${{ needs.build-macos-agent.result }}" != "success" ]; then
-            echo "❌ macOS agent build failed"
+          if [ "${{ needs.validate.result }}" != "success" ]; then
+            echo "Validation failed"
             exit 1
           fi
-          if [ "${{ needs.build-macos-service.result }}" != "success" ]; then
-            echo "❌ macOS service build failed"
+          if [ "${{ needs.security.result }}" != "success" ]; then
+            echo "Security scan failed"
             exit 1
           fi
-          if [ "${{ needs.build-macos-pkg.result }}" != "success" ]; then
-            echo "❌ macOS pkg build failed"
-            exit 1
-          fi
-          if [ "${{ needs.build-linux-service.result }}" != "success" ]; then
-            echo "❌ Linux service build failed"
-            exit 1
-          fi
-          if [ "${{ needs.build-windows-service.result }}" != "success" ]; then
-            echo "❌ Windows service build failed"
-            exit 1
-          fi
-          if [ "${{ needs.build-windows-tray.result }}" != "success" ]; then
-            echo "❌ Windows tray app build failed"
-            exit 1
-          fi
-          if [ "${{ needs.build-windows-credential-provider.result }}" != "success" ]; then
-            echo "❌ Windows credential provider build failed"
-            exit 1
-          fi
-          echo "✅ All builds passed!"
+          echo "All CI checks passed!"
+          echo ""
+          echo "Note: Platform builds (macOS, Windows, Linux) are done locally."
+          echo "This pipeline only validates code quality and security."

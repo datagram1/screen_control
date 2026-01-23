@@ -63,7 +63,7 @@
 #endif
 
 // HTTP server ports
-#define HTTP_SERVER_PORT 3459
+#define HTTP_SERVER_PORT 3456     // Main service HTTP API (tray app connects here)
 #define GUI_BRIDGE_PORT 3460      // GUI operations forwarded from service to tray app
 #define WEBSOCKET_SERVER_PORT 3458
 #define BROWSER_BRIDGE_PORT 3457  // Browser extension WebSocket (used by tray app only)

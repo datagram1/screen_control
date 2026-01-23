@@ -67,6 +67,10 @@ namespace ScreenControlTray
         private Dictionary<string, Dictionary<string, CheckBox>> _toolCheckboxes = new();
         private bool _suppressCheckboxEvents;
 
+        // Local settings locked state (managed by server)
+        private bool _localSettingsLocked;
+        private Label? _lockedStatusLabel;
+
         // Tool definitions - matches macOS implementation
         private static readonly Dictionary<string, (string Name, string[] Tools)> ToolCategories = new()
         {
@@ -114,10 +118,25 @@ namespace ScreenControlTray
         {
             _serviceClient = serviceClient;
             _toolsConfig = new Dictionary<string, Dictionary<string, bool>>();
+            LoadToolsConfig();  // Load config BEFORE UI so defaults are ready
             InitializeComponent();
             LoadDebugConfig();
-            LoadToolsConfig();
             _ = LoadDataAsync();
+
+            // Auto-connect if enabled in settings
+            Load += OnFormLoad;
+        }
+
+        private async void OnFormLoad(object? sender, EventArgs e)
+        {
+            // Check if auto-connect is enabled
+            if (_debugConnectOnStartupCheckBox.Checked)
+            {
+                DebugLog("Auto-connect enabled, connecting...");
+                // Small delay to ensure form is fully loaded
+                await Task.Delay(500);
+                OnDebugConnectClick(null, EventArgs.Empty);
+            }
         }
 
         private void InitializeComponent()
@@ -926,6 +945,7 @@ namespace ScreenControlTray
             _webSocketClient.OnLog += DebugLog;
             _webSocketClient.OnConnectionChanged += OnDebugConnectionChanged;
             _webSocketClient.OnStatusChanged += OnDebugStatusChanged;
+            _webSocketClient.OnPermissionsChanged += OnPermissionsChanged;
 
             var config = new DebugConfig
             {
@@ -1033,6 +1053,68 @@ namespace ScreenControlTray
             else
             {
                 _debugLicenseStatusLabel.ForeColor = Color.Red;
+            }
+        }
+
+        private void OnPermissionsChanged(bool masterMode, bool fileTransfer, bool localSettingsLocked)
+        {
+            if (InvokeRequired)
+            {
+                Invoke(new Action(() => OnPermissionsChanged(masterMode, fileTransfer, localSettingsLocked)));
+                return;
+            }
+
+            _localSettingsLocked = localSettingsLocked;
+            UpdateLockedState();
+        }
+
+        private void UpdateLockedState()
+        {
+            // When local settings are locked, disable Settings and Tools tabs
+            if (_localSettingsLocked)
+            {
+                // Disable Settings tab controls
+                _controlServerUrlTextBox.Enabled = false;
+                _portNumeric.Enabled = false;
+                _autoStartCheckBox.Enabled = false;
+                _loggingCheckBox.Enabled = false;
+                _saveButton.Enabled = false;
+                _lockScreenUsernameTextBox.Enabled = false;
+                _lockScreenPasswordTextBox.Enabled = false;
+                _saveCredentialsButton.Enabled = false;
+
+                // Disable Tools tab
+                _toolsPanel.Enabled = false;
+
+                // Update locked status label if it exists
+                if (_lockedStatusLabel != null)
+                {
+                    _lockedStatusLabel.Text = "Settings are locked by administrator";
+                    _lockedStatusLabel.Visible = true;
+                }
+
+                DebugLog("Local settings locked by administrator");
+            }
+            else
+            {
+                // Enable Settings tab controls
+                _controlServerUrlTextBox.Enabled = true;
+                _portNumeric.Enabled = true;
+                _autoStartCheckBox.Enabled = true;
+                _loggingCheckBox.Enabled = true;
+                _saveButton.Enabled = true;
+                _lockScreenUsernameTextBox.Enabled = true;
+                _lockScreenPasswordTextBox.Enabled = true;
+                _saveCredentialsButton.Enabled = true;
+
+                // Enable Tools tab
+                _toolsPanel.Enabled = true;
+
+                // Hide locked status label
+                if (_lockedStatusLabel != null)
+                {
+                    _lockedStatusLabel.Visible = false;
+                }
             }
         }
 

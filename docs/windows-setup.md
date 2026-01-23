@@ -1,35 +1,87 @@
 # ScreenControl Windows Build & Debug Setup
 
+**Current Version**: 2.0.4
+
 ## Building the Windows MSI Installer
 
-The MSI is built using Docker with Fedora and msitools (wixl). This works on ARM Mac.
+The build uses a hybrid approach:
+- **C++ Service**: Cross-compiled on Mac with mingw-w64
+- **Tray App**: Cross-compiled on Mac with .NET SDK
+- **MSI Packaging**: Built on remote x86 Docker server (wixl/msitools)
 
 ### Prerequisites
-- Docker installed and running
-- Built Windows binaries in `dist/` directory:
-  - `ScreenControlService.exe`
-  - `ScreenControlTray.exe`
-  - `ScreenControlCP.dll` (Credential Provider - optional)
+- mingw-w64 (`brew install mingw-w64`)
+- .NET SDK 8.0+ (`brew install dotnet`)
+- SSH access to x86 Docker host (`richardbrown@192.168.10.31`)
+- `wixl-builder:latest` Docker image on x86 host
 
-### Build Commands
+### One-Command Build
 
 ```bash
-# Navigate to the installer directory
-cd /Users/richardbrown/dev/screen_control/windows-build-package/installer
-
-# Build the MSI using Docker
-docker run --rm -v "$(pwd):/build" -w /build fedora:39 bash -c "
-  dnf install -y msitools &&
-  wixl -v -D DistDir=../dist -o ScreenControl-x64.msi Product.wxs
-"
+cd /Users/richardbrown/dev/screen_control/windows-build-package
+./build-windows.sh 2.0.4
 ```
+
+This script:
+1. Compiles C++ service with mingw-w64
+2. Compiles .NET tray app
+3. Syncs files to x86 server
+4. Builds MSI with wixl on x86 Docker
+5. Copies MSI back to local machine
+
+### Manual Build Commands
+
+```bash
+# 1. Build the Windows service (from Mac using MinGW cross-compiler)
+cd /Users/richardbrown/dev/screen_control/service
+mkdir -p build-windows && cd build-windows
+cmake .. -DCMAKE_TOOLCHAIN_FILE=../cmake/mingw-w64.cmake
+make -j4
+
+# 2. Build the tray app (from Mac using .NET)
+cd /Users/richardbrown/dev/screen_control/windows/ScreenControlTray
+dotnet publish -c Release -r win-x64 --self-contained true
+
+# 3. Copy binaries to dist
+cd /Users/richardbrown/dev/screen_control/windows-build-package
+mkdir -p dist
+cp ../service/build-windows/bin/ScreenControlService.exe dist/
+cp ../windows/ScreenControlTray/bin/Release/net8.0-windows/win-x64/publish/ScreenControlTray.exe dist/
+
+# 4. Sync to x86 server and build MSI
+rsync -az windows-build-package/ richardbrown@192.168.10.31:/tmp/screencontrol-build/
+ssh richardbrown@192.168.10.31 "cd /tmp/screencontrol-build && docker run --rm \
+  -v /tmp/screencontrol-build:/build -w /build/installer \
+  wixl-builder:latest wixl -v -D DistDir=/build/dist \
+  -o /build/installer/output/ScreenControl-2.0.4-x64.msi Product-wixl.wxs"
+scp richardbrown@192.168.10.31:/tmp/screencontrol-build/installer/output/*.msi installer/output/
+```
+
+### wixl vs WiX Feature Comparison
+
+The wixl build (msitools) supports core MSI features but lacks some WiX-specific features:
+
+| Feature | wixl | Full WiX |
+|---------|------|----------|
+| Service install/control | ✅ | ✅ |
+| Registry entries | ✅ | ✅ |
+| Shortcuts (Start Menu, Startup) | ✅ | ✅ |
+| Directory creation | ✅ | ✅ |
+| Major upgrade handling | ✅ | ✅ |
+| Custom actions | ❌ | ✅ |
+| Conditions (admin, OS version) | ❌ | ✅ |
+| WixUI dialogs | ❌ | ✅ |
+| Credential provider registration | ❌ | ✅ |
+
+For full WiX support, use a Windows CI runner (GitHub Actions, Azure DevOps).
 
 ### Version Updates
 
-Edit `Product.wxs` line 24 to update version:
-```xml
-Version="1.2.2.0"
-```
+When releasing a new version, update ALL these files:
+- `version.json` - Central version info
+- `service/CMakeLists.txt` - Line 2: `VERSION 2.0.4`
+- `windows-build-package/installer/Product.wxs` - Line 24: `Version="2.0.4.0"`
+- `windows/ScreenControlTray/ScreenControlTray.csproj` - Line 12: `<Version>2.0.4</Version>`
 
 ### What Gets Installed
 
@@ -142,12 +194,47 @@ The MSI installs it to `C:\Program Files\ScreenControl\ScreenControlCP.dll` and 
 
 ## Self-Update Mechanism
 
-The service checks for updates and uses `update_windows.cpp` to:
-1. Download update package
-2. Create backup of current installation
-3. Generate update.bat script
-4. Stop service and tray app
-5. Extract and replace binaries
-6. Restart service and tray app
+The service automatically checks for updates and can self-update without manual intervention.
 
-Update logs are written to: `%TEMP%\screencontrol_update.log`
+### How It Works
+
+1. **Heartbeat-Based Checking**: Every ~5 minutes (60 heartbeats × 5s interval), the service checks for updates
+2. **Server API**: Uses `GET /api/updates/check?platform=windows&arch=x64&currentVersion=X.X.X`
+3. **Automatic Download**: If update available, downloads to temp folder using WinHTTP
+4. **Checksum Verification**: Verifies SHA256 using BCrypt API
+5. **Installation**: Uses `update_windows.cpp` to:
+   - Create backup of current installation
+   - Generate update.bat script
+   - Stop service and tray app
+   - Extract and replace binaries
+   - Restart service and tray app
+
+### Update Logs
+- Service logs: `C:\ProgramData\ScreenControl\Logs\service.log`
+- Update script logs: `%TEMP%\screencontrol_update.log`
+
+### Server-Side Update Management
+
+To deploy a new version:
+
+1. **Upload update package** to server via `/api/updates/upload`
+2. **Create version record** in database:
+```sql
+INSERT INTO "AgentVersion" (id, version, channel, "isActive", "releaseDate", "releaseNotes")
+VALUES (gen_random_uuid(), '2.0.4', 'STABLE', true, NOW(), 'Auto-update support');
+
+INSERT INTO "AgentVersionBuild" (id, "versionId", platform, arch, filename, sha256, "fileSize")
+VALUES (gen_random_uuid(), '<version_id>', 'WINDOWS', 'x64', 'ScreenControl-2.0.4-windows-x64.zip', '<sha256>', <size>);
+```
+
+3. **Gradual Rollout**: Set `rolloutPercent` (0-100) for staged deployment
+4. **Force Update**: Set `minVersion` to force agents below that version to update
+
+### Configuration
+
+Update settings in `main_windows.cpp`:
+```cpp
+updateConfig.autoDownload = true;   // Automatically download updates
+updateConfig.autoInstall = true;    // Automatically install updates
+updateConfig.checkIntervalHeartbeats = 60;  // Check every ~5 minutes
+```

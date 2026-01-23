@@ -455,7 +455,8 @@ void WebSocketClient::sendRegistration()
     message["arch"] = "x86";
 #endif
 
-    message["agentVersion"] = "2.0.2";
+    // Use SERVICE_VERSION from CMakeLists.txt (set via compile definition)
+    message["agentVersion"] = SERVICE_VERSION;
 
     if (!m_config.endpointUuid.empty())
     {
@@ -717,6 +718,14 @@ void WebSocketClient::handleHeartbeatAck(const nlohmann::json& j)
     if (m_statusCallback)
     {
         m_statusCallback(m_agentId, m_licenseStatus);
+    }
+
+    // Check for update flag (supports both "u" and "updateFlag" field names)
+    // 0 = no update, 1 = update available, 2 = forced update
+    int updateFlag = j.value("u", j.value("updateFlag", 0));
+    if (m_heartbeatCallback)
+    {
+        m_heartbeatCallback(updateFlag);
     }
 }
 

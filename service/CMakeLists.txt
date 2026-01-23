@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(ScreenControlService VERSION 1.2.0 LANGUAGES CXX)
+project(ScreenControlService VERSION 2.0.5 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -162,6 +162,7 @@ if(PLATFORM_MACOS)
 
     target_compile_definitions(ScreenControlService PRIVATE
         PLATFORM_MACOS=1
+        SERVICE_VERSION="${PROJECT_VERSION}"
     )
 
     # macOS deployment target
@@ -174,6 +175,7 @@ elseif(PLATFORM_WINDOWS)
         NOMINMAX
         WIN32_LEAN_AND_MEAN
         _WIN32_WINNT=0x0600
+        SERVICE_VERSION="${PROJECT_VERSION}"
     )
 
     target_link_libraries(ScreenControlService
@@ -212,6 +214,7 @@ else()
     # Linux
     target_compile_definitions(ScreenControlService PRIVATE
         PLATFORM_LINUX=1
+        SERVICE_VERSION="${PROJECT_VERSION}"
     )
 
     # Find required packages

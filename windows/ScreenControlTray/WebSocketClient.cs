@@ -7,6 +7,7 @@
 
 using System;
 using System.Net.WebSockets;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -42,11 +43,17 @@ namespace ScreenControlTray
         public string? AgentId { get; private set; }
         public string? LicenseStatus { get; private set; }
 
+        // Server-controlled permissions
+        public bool MasterModeEnabled { get; private set; }
+        public bool FileTransferEnabled { get; private set; }
+        public bool LocalSettingsLocked { get; private set; }
+
         // Events
         public event Action<string>? OnLog;
         public event Action<bool>? OnConnectionChanged;
         public event Action<string, string>? OnStatusChanged; // (agentId, licenseStatus)
         public event Action<string, string, string>? OnCommand; // (requestId, method, params)
+        public event Action<bool, bool, bool>? OnPermissionsChanged; // (masterMode, fileTransfer, localSettingsLocked)
 
         public async Task ConnectAsync(DebugConfig config)
         {
@@ -125,7 +132,7 @@ namespace ScreenControlTray
                 osType = "windows",
                 osVersion = osVersion,
                 arch = Environment.Is64BitOperatingSystem ? "x64" : "x86",
-                agentVersion = "1.0.0-debug",
+                agentVersion = GetAssemblyVersion(),
                 licenseUuid = string.IsNullOrEmpty(config.EndpointUuid) ? null : config.EndpointUuid,
                 customerId = string.IsNullOrEmpty(config.CustomerId) ? null : config.CustomerId,
                 fingerprint = new
@@ -274,6 +281,27 @@ namespace ScreenControlTray
             var licenseStatus = root.TryGetProperty("licenseStatus", out var ls) ? ls.GetString() ?? "unknown" : "unknown";
             LicenseStatus = licenseStatus;
             OnStatusChanged?.Invoke(AgentId ?? "", licenseStatus);
+
+            // Handle permissions from heartbeat_ack
+            if (root.TryGetProperty("permissions", out var perms))
+            {
+                var masterMode = perms.TryGetProperty("masterMode", out var mm) && mm.GetBoolean();
+                var fileTransfer = perms.TryGetProperty("fileTransfer", out var ft) && ft.GetBoolean();
+                var localSettingsLocked = perms.TryGetProperty("localSettingsLocked", out var lsl) && lsl.GetBoolean();
+
+                // Check if any permission changed
+                if (masterMode != MasterModeEnabled ||
+                    fileTransfer != FileTransferEnabled ||
+                    localSettingsLocked != LocalSettingsLocked)
+                {
+                    MasterModeEnabled = masterMode;
+                    FileTransferEnabled = fileTransfer;
+                    LocalSettingsLocked = localSettingsLocked;
+
+                    Log($"Permissions updated: masterMode={masterMode}, fileTransfer={fileTransfer}, localSettingsLocked={localSettingsLocked}");
+                    OnPermissionsChanged?.Invoke(masterMode, fileTransfer, localSettingsLocked);
+                }
+            }
         }
 
         private async void HandleRequest(JsonElement root)
@@ -288,20 +316,69 @@ namespace ScreenControlTray
 
             Log($"← REQUEST: {method}");
 
-            // Notify listeners (they can handle the command)
+            // Notify listeners
             OnCommand?.Invoke(requestId, method, paramsJson);
 
-            // Send a basic response
+            // Forward command to local service and get actual result
+            object result;
+            try
+            {
+                result = await ForwardToLocalService(method, paramsJson);
+                Log($"→ RESPONSE: {requestId} (success)");
+            }
+            catch (Exception ex)
+            {
+                result = new { success = false, error = ex.Message };
+                Log($"→ RESPONSE: {requestId} (error: {ex.Message})");
+            }
+
             var response = new
             {
                 type = "response",
                 id = requestId,
-                result = new { success = true, message = "Command received" }
+                result = result
             };
 
             var json = JsonSerializer.Serialize(response);
             await SendMessageAsync(json);
-            Log($"→ RESPONSE: {requestId}");
+        }
+
+        private async Task<object> ForwardToLocalService(string method, string paramsJson)
+        {
+            using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+
+            // Map MCP method to local service endpoint
+            var endpoint = method switch
+            {
+                "shell_exec" => "/shell/exec",
+                "shell_start_session" => "/shell/session/start",
+                "shell_send_input" => "/shell/session/input",
+                "shell_stop_session" => "/shell/session/stop",
+                "fs_list" => "/fs/list",
+                "fs_read" => "/fs/read",
+                "fs_write" => "/fs/write",
+                "fs_delete" => "/fs/delete",
+                "fs_move" => "/fs/move",
+                "fs_search" => "/fs/search",
+                "fs_grep" => "/fs/grep",
+                "screenshot" => "/screenshot",
+                "screenshot_grid" => "/screenshot/grid",
+                "click" => "/input/click",
+                "click_grid" => "/input/click_grid",
+                "typeText" => "/input/type",
+                "pressKey" => "/input/key",
+                "listApplications" => "/apps/list",
+                "launchApplication" => "/apps/launch",
+                "focusApplication" => "/apps/focus",
+                _ => $"/{method.Replace("_", "/")}"
+            };
+
+            var content = new System.Net.Http.StringContent(paramsJson, Encoding.UTF8, "application/json");
+            var response = await client.PostAsync($"http://127.0.0.1:3456{endpoint}", content);
+            var responseJson = await response.Content.ReadAsStringAsync();
+
+            // Parse and return the result
+            return JsonSerializer.Deserialize<object>(responseJson) ?? new { success = false, error = "Empty response" };
         }
 
         private void StartHeartbeat(int intervalMs)
@@ -328,6 +405,20 @@ namespace ScreenControlTray
         }
 
         // System information helpers
+
+        private static string GetAssemblyVersion()
+        {
+            try
+            {
+                // Use assembly version (same as tray menu)
+                var version = Assembly.GetExecutingAssembly().GetName().Version;
+                return version != null ? $"{version.Major}.{version.Minor}.{version.Build}" : "unknown";
+            }
+            catch
+            {
+                return "unknown";
+            }
+        }
 
         private static string GetMachineId()
         {

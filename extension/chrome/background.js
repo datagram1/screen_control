@@ -33,15 +33,13 @@ const browserAPI = (() => {
 
   // Browser Bridge Server WebSocket URLs
   // Port 3457: GUI Agent app (WebSocket server)
-  // Port 3458: StdioMCPBridge (WebSocket server for Claude Code)
   // Note: Port 3459 (ScreenControlService) is HTTP-only, not WebSocket
   const BROWSER_BRIDGE_URLS = [
-    'ws://127.0.0.1:3457',
-    'ws://127.0.0.1:3458'
+    'ws://127.0.0.1:3457'
   ];
 
   // Native messaging host name (must match the host manifest) - fallback
-  const NATIVE_HOST = 'com.screencontrol.bridge';
+  const NATIVE_HOST = 'com.mcpeyes.bridge';
 
   /**
    * Detect browser type from user agent

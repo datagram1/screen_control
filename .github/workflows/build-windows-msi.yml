@@ -1,0 +1,156 @@
+name: Build Windows MSI
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g., 1.2.0)'
+        required: true
+        default: '1.2.0'
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-windows:
+    name: Build Windows MSI Installer
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install WiX Toolset
+        run: |
+          choco install wixtoolset -y
+          echo "C:\Program Files (x86)\WiX Toolset v3.14\bin" >> $env:GITHUB_PATH
+
+      - name: Setup MSVC
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Setup CMake
+        uses: jwlawson/actions-setup-cmake@v2
+
+      - name: Get version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+
+      # Build the C++ service
+      - name: Build ScreenControl Service
+        run: |
+          cd service
+          mkdir build
+          cd build
+          cmake .. -G "Visual Studio 17 2022" -A x64
+          cmake --build . --config Release
+          mkdir -p ../../dist/windows-x64
+          cp Release/ScreenControlService.exe ../../dist/windows-x64/
+
+      # Build the .NET tray app
+      - name: Build ScreenControl Tray
+        run: |
+          cd windows/ScreenControlTray
+          dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o ../../dist/windows-x64
+
+      # Build the Credential Provider (optional - skip if not needed)
+      - name: Build Credential Provider
+        continue-on-error: true
+        run: |
+          cd windows-build-package/credential_provider
+          if (Test-Path "ScreenControlCP.sln") {
+            msbuild ScreenControlCP.sln /p:Configuration=Release /p:Platform=x64
+            if (Test-Path "x64/Release/ScreenControlCP.dll") {
+              cp x64/Release/ScreenControlCP.dll ../../dist/windows-x64/
+            }
+          }
+
+      # Create a stub DLL if credential provider didn't build
+      - name: Check Credential Provider
+        shell: pwsh
+        run: |
+          $dllPath = "dist/windows-x64/ScreenControlCP.dll"
+          if (-not (Test-Path $dllPath)) {
+            Write-Host "Credential Provider not built - creating installer without it"
+            # Update Product.wxs to remove credential provider component
+            $wxsPath = "windows-build-package/installer/Product.wxs"
+            $content = Get-Content $wxsPath -Raw
+            # Comment out the credential provider component reference
+            $content = $content -replace '<ComponentRef Id="CredentialProviderComponent" />', '<!-- <ComponentRef Id="CredentialProviderComponent" /> -->'
+            Set-Content $wxsPath $content
+          }
+
+      # Copy files to installer location
+      - name: Prepare installer files
+        run: |
+          mkdir -p windows-build-package/dist-windows-x64
+          cp dist/windows-x64/*.exe windows-build-package/dist-windows-x64/
+          if (Test-Path "dist/windows-x64/ScreenControlCP.dll") {
+            cp dist/windows-x64/ScreenControlCP.dll windows-build-package/dist-windows-x64/
+          }
+
+      # Create License.rtf for installer
+      - name: Create License file
+        shell: pwsh
+        run: |
+          $license = @"
+          {\rtf1\ansi\deff0
+          {\fonttbl{\f0 Arial;}}
+          \f0\fs20
+          ScreenControl Software License Agreement\par
+          \par
+          Copyright (c) 2024 ScreenControl\par
+          \par
+          Permission is hereby granted to use this software for authorized purposes.\par
+          \par
+          THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.\par
+          }
+          "@
+          Set-Content "windows-build-package/installer/License.rtf" $license
+
+      # Build the MSI
+      - name: Build MSI Installer
+        shell: pwsh
+        run: |
+          cd windows-build-package/installer
+          $version = "${{ steps.version.outputs.version }}"
+
+          # Run candle (WiX compiler)
+          & candle.exe Product.wxs -arch x64 -dDistDir="..\dist-windows-x64" -dVersion="$version.0" -out Product.wixobj
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          # Run light (WiX linker)
+          & light.exe Product.wixobj -ext WixUIExtension -cultures:en-us -out "ScreenControl-$version-x64.msi"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          Write-Host "MSI created: ScreenControl-$version-x64.msi"
+
+      # Upload the MSI
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScreenControl-${{ steps.version.outputs.version }}-x64-msi
+          path: windows-build-package/installer/ScreenControl-*.msi
+          retention-days: 30
+
+      # Also upload the raw binaries
+      - name: Upload binaries artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScreenControl-${{ steps.version.outputs.version }}-x64-binaries
+          path: |
+            dist/windows-x64/*.exe
+            dist/windows-x64/*.dll
+          retention-days: 30

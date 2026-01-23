@@ -1,12 +1,10 @@
-# Release Pipeline - Triggered on version tags
-# Builds and publishes releases for all platforms
+# Release Pipeline - Manual releases only
+# All builds are done locally on self-hosted infrastructure
+# This workflow creates a GitHub release with manually uploaded artifacts
 
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*.*.*'
   workflow_dispatch:
     inputs:
       version:
@@ -18,309 +16,18 @@ on:
         required: false
         type: boolean
         default: false
+      release_notes:
+        description: 'Additional release notes (optional)'
+        required: false
+        type: string
 
 jobs:
-  # ============================================
-  # Validate Release
-  # ============================================
-  validate:
-    name: Validate Release
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Determine version
-        id: version
-        run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-          else
-            VERSION="${GITHUB_REF#refs/tags/v}"
-          fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Release version: $VERSION"
-
-  # ============================================
-  # Build macOS Agent
-  # ============================================
-  build-macos:
-    name: Build macOS Agent
-    runs-on: macos-14
-    needs: validate
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
-
-      - name: Build Release
-        working-directory: macos
-        run: |
-          xcodebuild -project ScreenControl.xcodeproj \
-            -scheme ScreenControl \
-            -configuration Release \
-            -derivedDataPath build \
-            CODE_SIGN_IDENTITY="-" \
-            CODE_SIGNING_REQUIRED=NO \
-            build
-
-      - name: Verify no TestServer in Release
-        working-directory: macos
-        run: |
-          if nm build/Build/Products/Release/ScreenControl.app/Contents/MacOS/ScreenControl 2>/dev/null | grep -q "TestServer"; then
-            echo "✗ SECURITY FAIL: TestServer in release!"
-            exit 1
-          fi
-          echo "✓ TestServer correctly excluded"
-
-      - name: Create DMG
-        working-directory: macos
-        run: |
-          mkdir -p dmg-contents
-          cp -R build/Build/Products/Release/ScreenControl.app dmg-contents/
-          hdiutil create -volname "ScreenControl" \
-            -srcfolder dmg-contents \
-            -ov -format UDZO \
-            "ScreenControl-${{ needs.validate.outputs.version }}-macOS.dmg"
-
-      - name: Create ZIP
-        working-directory: macos
-        run: |
-          cd build/Build/Products/Release
-          zip -r "../../../../ScreenControl-${{ needs.validate.outputs.version }}-macOS.zip" ScreenControl.app
-
-      - name: Upload macOS DMG
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-dmg
-          path: macos/ScreenControl-*.dmg
-          retention-days: 30
-
-      - name: Upload macOS ZIP
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-zip
-          path: macos/ScreenControl-*.zip
-          retention-days: 30
-
-  # ============================================
-  # Build macOS Installer (.pkg)
-  # ============================================
-  build-macos-pkg:
-    name: Build macOS Installer
-    runs-on: macos-14
-    needs: validate
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
-
-      - name: Install dependencies
-        run: brew install openssl@3
-
-      - name: Build pkg installer
-        working-directory: service/install/macos/pkg
-        run: |
-          chmod +x build_pkg.sh
-          ./build_pkg.sh --version ${{ needs.validate.outputs.version }}
-        env:
-          OPENSSL_ROOT_DIR: /opt/homebrew/opt/openssl@3
-
-      - name: Upload macOS pkg
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-pkg
-          path: service/install/macos/pkg/output/*.pkg
-          retention-days: 30
-
-  # ============================================
-  # Build macOS Service
-  # ============================================
-  build-macos-service:
-    name: Build macOS Service
-    runs-on: macos-14
-    needs: validate
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: brew install openssl@3
-
-      - name: Build Service
-        working-directory: service
-        run: |
-          mkdir -p build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release \
-            -DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)
-          make -j$(sysctl -n hw.ncpu)
-
-      - name: Create tarball
-        run: |
-          mkdir -p release-macos-service
-          cp service/build/bin/ScreenControlService release-macos-service/
-          cp README.md release-macos-service/ 2>/dev/null || true
-          tar -czvf ScreenControlService-${{ needs.validate.outputs.version }}-macos.tar.gz release-macos-service
-
-      - name: Upload macOS Service
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-service-tarball
-          path: ScreenControlService-*.tar.gz
-          retention-days: 30
-
-  # ============================================
-  # Build Linux Service
-  # ============================================
-  build-linux:
-    name: Build Linux Service
-    runs-on: ubuntu-latest
-    needs: validate
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake build-essential pkg-config \
-            libx11-dev libxrandr-dev libxtst-dev libpng-dev \
-            libssl-dev libsecret-1-dev
-
-      - name: Build Service
-        working-directory: service
-        run: |
-          mkdir -p build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release
-          make -j$(nproc)
-
-      - name: Create tarball
-        run: |
-          mkdir -p release-linux
-          cp service/build/bin/ScreenControlService release-linux/
-          cp README.md release-linux/ 2>/dev/null || true
-          tar -czvf ScreenControl-${{ needs.validate.outputs.version }}-linux-x64.tar.gz release-linux
-
-      - name: Upload Linux build
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-tarball
-          path: ScreenControl-*.tar.gz
-          retention-days: 30
-
-  # ============================================
-  # Build Windows Components
-  # ============================================
-  build-windows:
-    name: Build Windows Components
-    runs-on: windows-latest
-    needs: validate
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup MSVC
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
-
-      - name: Build Service
-        working-directory: service
-        run: |
-          mkdir build
-          cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
-          cmake --build . --config Release
-
-      - name: Build Tray App
-        working-directory: windows/ScreenControlTray
-        run: |
-          dotnet restore
-          dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish
-
-      - name: Build Credential Provider
-        working-directory: service/src/platform/windows/credential_provider
-        run: |
-          mkdir build
-          cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64
-          cmake --build . --config Release
-
-      - name: Create Windows package
-        shell: pwsh
-        run: |
-          $version = "${{ needs.validate.outputs.version }}"
-          $distDir = "dist-windows"
-          New-Item -ItemType Directory -Path $distDir -Force
-
-          # Copy binaries
-          Copy-Item "service/build/bin/Release/ScreenControlService.exe" $distDir/
-          Copy-Item "windows/ScreenControlTray/publish/ScreenControlTray.exe" $distDir/
-          Copy-Item "service/src/platform/windows/credential_provider/build/bin/Release/ScreenControlCP.dll" $distDir/
-
-          # Create ZIP
-          Compress-Archive -Path "$distDir/*" -DestinationPath "ScreenControl-$version-windows-x64.zip"
-
-      - name: Upload Windows package
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-package
-          path: ScreenControl-*-windows-x64.zip
-          retention-days: 30
-
-  # ============================================
-  # Test macOS Release Build
-  # ============================================
-  test-macos:
-    name: Test macOS Release
-    runs-on: macos-14
-    needs: build-macos
-
-    steps:
-      - name: Download macOS ZIP
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-zip
-          path: .
-
-      - name: Extract and verify
-        run: |
-          unzip ScreenControl-*.zip
-          # Verify binary exists and is executable
-          if [ ! -x "ScreenControl.app/Contents/MacOS/ScreenControl" ]; then
-            echo "✗ Binary not executable"
-            exit 1
-          fi
-          echo "✓ macOS release verified"
-
   # ============================================
   # Create GitHub Release
   # ============================================
   create-release:
     name: Create Release
     runs-on: ubuntu-latest
-    needs: [validate, build-macos, build-macos-pkg, build-macos-service, build-linux, build-windows, test-macos]
     permissions:
       contents: write
 
@@ -328,71 +35,85 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: List artifacts
+      - name: Validate version format
         run: |
-          echo "Downloaded artifacts:"
-          find artifacts -type f
+          VERSION="${{ github.event.inputs.version }}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid version format: $VERSION"
+            echo "Expected format: X.Y.Z (e.g., 1.2.3)"
+            exit 1
+          fi
+          echo "Version $VERSION is valid"
 
       - name: Generate release notes
         id: notes
         run: |
-          VERSION="${{ needs.validate.outputs.version }}"
-          cat << EOF > release-notes.md
+          VERSION="${{ github.event.inputs.version }}"
+          EXTRA_NOTES="${{ github.event.inputs.release_notes }}"
+
+          cat << 'EOF' > release-notes.md
           ## ScreenControl v$VERSION
-
-          ### Downloads
-
-          | Platform | File | Description |
-          |----------|------|-------------|
-          | macOS | ScreenControl-$VERSION.pkg | **Installer** (Agent + Service) |
-          | macOS | ScreenControl-$VERSION-macOS.dmg | GUI Agent only (Disk image) |
-          | macOS | ScreenControl-$VERSION-macOS.zip | GUI Agent only (ZIP) |
-          | macOS | ScreenControlService-$VERSION-macos.tar.gz | Standalone service only |
-          | Windows | ScreenControl-$VERSION-windows-x64.zip | Service + Tray + Credential Provider |
-          | Linux | ScreenControl-$VERSION-linux-x64.tar.gz | Linux x64 service |
 
           ### Installation
 
           **macOS:**
-          1. Download the DMG file
-          2. Open and drag ScreenControl to Applications
-          3. Grant Accessibility and Screen Recording permissions
+          1. Download the .pkg installer or .dmg file
+          2. Run the installer or drag ScreenControl to Applications
+          3. Grant Accessibility and Screen Recording permissions when prompted
 
           **Windows:**
-          1. Extract the ZIP file
+          1. Download and extract the Windows ZIP file
           2. Run ScreenControlService.exe as Administrator
           3. Run ScreenControlTray.exe for system tray controls
           4. (Optional) Register ScreenControlCP.dll for credential provider unlock
 
           **Linux:**
-          1. Extract the tarball
-          2. Run the service: \`./ScreenControlService\`
+          1. Download and extract the Linux tarball
+          2. Run the service: `./ScreenControlService`
           3. Configure systemd for auto-start (optional)
 
-          ### Changes
+          ### Building from Source
 
-          See commit history for changes in this release.
+          Builds are done locally. See the README for build instructions.
+
           EOF
+
+          # Replace placeholder with actual version
+          sed -i "s/\$VERSION/$VERSION/g" release-notes.md
+
+          # Append extra notes if provided
+          if [ -n "$EXTRA_NOTES" ]; then
+            echo "" >> release-notes.md
+            echo "### Additional Notes" >> release-notes.md
+            echo "" >> release-notes.md
+            echo "$EXTRA_NOTES" >> release-notes.md
+          fi
+
+          echo "Release notes generated:"
+          cat release-notes.md
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ needs.validate.outputs.version }}
-          name: ScreenControl v${{ needs.validate.outputs.version }}
+          tag_name: v${{ github.event.inputs.version }}
+          name: ScreenControl v${{ github.event.inputs.version }}
           body_path: release-notes.md
-          draft: false
-          prerelease: ${{ github.event.inputs.prerelease || false }}
-          files: |
-            artifacts/macos-pkg/*.pkg
-            artifacts/macos-dmg/*.dmg
-            artifacts/macos-zip/*.zip
-            artifacts/macos-service-tarball/*.tar.gz
-            artifacts/windows-package/*.zip
-            artifacts/linux-tarball/*.tar.gz
+          draft: true
+          prerelease: ${{ github.event.inputs.prerelease }}
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Release created
+        run: |
+          echo "Release v${{ github.event.inputs.version }} created as DRAFT"
+          echo ""
+          echo "Next steps:"
+          echo "1. Build artifacts locally for each platform"
+          echo "2. Upload artifacts to the draft release"
+          echo "3. Review and publish the release"
+          echo ""
+          echo "Build commands:"
+          echo "  macOS:   cd macos && xcodebuild -scheme ScreenControl -configuration Release"
+          echo "  Linux:   cd service && mkdir build && cd build && cmake .. && make"
+          echo "  Windows: cd service && mkdir build && cd build && cmake .. && cmake --build . --config Release"

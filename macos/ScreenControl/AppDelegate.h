@@ -70,9 +70,15 @@
 // Service client (monitors and controls the background service)
 @property (strong, nonatomic) ServiceClient *serviceClient;
 
+// Bundled service process (launched by tray app)
+@property (strong, nonatomic) NSTask *serviceTask;
+
 // Service status UI
 @property (strong, nonatomic) NSTextField *serviceStatusLabel;
 @property (strong, nonatomic) NSImageView *serviceStatusIndicator;
+
+// Run at Login checkbox
+@property (strong, nonatomic) NSButton *runAtLoginCheckbox;
 
 // Legacy browser bridge process properties (deprecated - using Native Messaging now)
 @property (strong, nonatomic) NSTask *browserBridgeTask;
@@ -157,5 +163,13 @@
 
 // Tool advertisement (for dynamic capability discovery)
 - (NSArray *)getAvailableTools;
+
+// Service management (bundled ScreenControlService)
+- (void)ensureBundledServiceRunning;
+- (void)stopBundledService;
+
+// Login item management
+- (BOOL)isRunAtLoginEnabled;
+- (void)setRunAtLoginEnabled:(BOOL)enabled;
 
 @end
