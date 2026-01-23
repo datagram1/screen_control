@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useSession } from 'next-auth/react';
 
 interface UserSettings {
   id: string;
@@ -21,7 +20,6 @@ interface Session {
 }
 
 export default function SettingsPage() {
-  const { data: session } = useSession();
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
