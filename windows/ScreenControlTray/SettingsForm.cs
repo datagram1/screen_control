@@ -40,6 +40,11 @@ namespace ScreenControlTray
         private CheckBox _loggingCheckBox = null!;
         private Button _saveButton = null!;
 
+        // Lock screen credentials - initialized in InitializeSettingsTab()
+        private TextBox _lockScreenUsernameTextBox = null!;
+        private TextBox _lockScreenPasswordTextBox = null!;
+        private Button _saveCredentialsButton = null!;
+
         // Debug tab - initialized in InitializeDebugTab()
         private TextBox _debugServerUrlTextBox = null!;
         private TextBox _debugEndpointUuidTextBox = null!;
@@ -243,12 +248,32 @@ namespace ScreenControlTray
 
         private void InitializeSettingsTab(TabPage tab)
         {
+            var mainPanel = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 2,
+                Padding = new Padding(10)
+            };
+
+            mainPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            mainPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+            // Service Settings Group
+            var serviceGroup = new GroupBox
+            {
+                Text = "Service Settings",
+                Dock = DockStyle.Top,
+                Height = 180,
+                Padding = new Padding(10)
+            };
+
             var panel = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 2,
-                RowCount = 6,
-                Padding = new Padding(20)
+                RowCount = 5,
+                Padding = new Padding(5)
             };
 
             panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
@@ -283,7 +308,142 @@ namespace ScreenControlTray
             _saveButton.Click += OnSaveClick;
             panel.Controls.Add(_saveButton, 1, 4);
 
-            tab.Controls.Add(panel);
+            serviceGroup.Controls.Add(panel);
+            mainPanel.Controls.Add(serviceGroup, 0, 0);
+
+            // Lock Screen Credentials Group
+            var credGroup = new GroupBox
+            {
+                Text = "Lock Screen Credentials",
+                Dock = DockStyle.Top,
+                Height = 150,
+                Padding = new Padding(10)
+            };
+
+            var credPanel = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 2,
+                RowCount = 4,
+                Padding = new Padding(5)
+            };
+
+            credPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
+            credPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+
+            // Description
+            var descLabel = new Label
+            {
+                Text = "Store Windows credentials for remote screen unlock via ScreenControl.",
+                AutoSize = false,
+                Width = 300,
+                Height = 30
+            };
+            credPanel.SetColumnSpan(descLabel, 2);
+            credPanel.Controls.Add(descLabel, 0, 0);
+
+            // Username
+            credPanel.Controls.Add(new Label { Text = "Username:", AutoSize = true }, 0, 1);
+            _lockScreenUsernameTextBox = new TextBox { Width = 250 };
+            credPanel.Controls.Add(_lockScreenUsernameTextBox, 1, 1);
+
+            // Password
+            credPanel.Controls.Add(new Label { Text = "Password:", AutoSize = true }, 0, 2);
+            _lockScreenPasswordTextBox = new TextBox { Width = 250, UseSystemPasswordChar = true };
+            credPanel.Controls.Add(_lockScreenPasswordTextBox, 1, 2);
+
+            // Save credentials button
+            _saveCredentialsButton = new Button { Text = "Save Credentials", Size = new Size(120, 30) };
+            _saveCredentialsButton.Click += OnSaveCredentialsClick;
+            credPanel.Controls.Add(_saveCredentialsButton, 1, 3);
+
+            credGroup.Controls.Add(credPanel);
+            mainPanel.Controls.Add(credGroup, 0, 1);
+
+            tab.Controls.Add(mainPanel);
+
+            // Load saved credentials
+            LoadLockScreenCredentials();
+        }
+
+        private string GetCredentialsConfigPath()
+        {
+            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            var configDir = Path.Combine(appData, "ScreenControl");
+            Directory.CreateDirectory(configDir);
+            return Path.Combine(configDir, "credentials.json");
+        }
+
+        private void LoadLockScreenCredentials()
+        {
+            try
+            {
+                var configPath = GetCredentialsConfigPath();
+                if (File.Exists(configPath))
+                {
+                    var json = File.ReadAllText(configPath);
+                    var creds = JsonSerializer.Deserialize<LockScreenCredentials>(json);
+                    if (creds != null)
+                    {
+                        _lockScreenUsernameTextBox.Text = creds.Username ?? "";
+                        // Password is stored but not displayed for security
+                        if (!string.IsNullOrEmpty(creds.EncryptedPassword))
+                        {
+                            _lockScreenPasswordTextBox.PlaceholderText = "(saved)";
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Failed to load credentials: {ex.Message}");
+            }
+        }
+
+        private void OnSaveCredentialsClick(object? sender, EventArgs e)
+        {
+            try
+            {
+                var username = _lockScreenUsernameTextBox.Text.Trim();
+                var password = _lockScreenPasswordTextBox.Text;
+
+                if (string.IsNullOrEmpty(username))
+                {
+                    MessageBox.Show("Please enter a username.", "ScreenControl", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                // Encrypt password using DPAPI (Windows Data Protection API)
+                var encryptedPassword = "";
+                if (!string.IsNullOrEmpty(password))
+                {
+                    var passwordBytes = System.Text.Encoding.UTF8.GetBytes(password);
+                    var encryptedBytes = System.Security.Cryptography.ProtectedData.Protect(
+                        passwordBytes,
+                        null,
+                        System.Security.Cryptography.DataProtectionScope.LocalMachine
+                    );
+                    encryptedPassword = Convert.ToBase64String(encryptedBytes);
+                }
+
+                var creds = new LockScreenCredentials
+                {
+                    Username = username,
+                    EncryptedPassword = encryptedPassword
+                };
+
+                var json = JsonSerializer.Serialize(creds, new JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(GetCredentialsConfigPath(), json);
+
+                _lockScreenPasswordTextBox.Text = "";
+                _lockScreenPasswordTextBox.PlaceholderText = "(saved)";
+
+                MessageBox.Show("Credentials saved securely.", "ScreenControl", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Failed to save credentials: {ex.Message}", "ScreenControl", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         private void InitializeToolsTab(TabPage tab)

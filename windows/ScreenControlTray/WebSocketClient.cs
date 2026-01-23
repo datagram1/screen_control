@@ -24,6 +24,12 @@ namespace ScreenControlTray
         public bool ConnectOnStartup { get; set; } = false;
     }
 
+    public class LockScreenCredentials
+    {
+        public string Username { get; set; } = "";
+        public string EncryptedPassword { get; set; } = "";
+    }
+
     public class WebSocketClient : IDisposable
     {
         private ClientWebSocket? _webSocket;

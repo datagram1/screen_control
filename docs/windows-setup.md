@@ -119,10 +119,10 @@ git add -A && git commit -m "description" && git push
 ssh richardbrown@192.168.10.10
 
 # Pull and restart
-cd /path/to/screen_control/web
+cd /var/www/html/screencontrol/web
 git pull
 npm run build
-pm2 restart screencontrol
+pm2 restart screencontrol-web
 ```
 
 ---
