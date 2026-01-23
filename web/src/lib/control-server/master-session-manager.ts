@@ -119,9 +119,9 @@ class MasterSessionManager {
     agentId: string;
     name: string;
     osType: string;
-    isOnline: boolean;
+    status: string;
     powerState: string;
-    lastSeen: Date;
+    lastSeenAt: Date;
   }>> {
     const session = this.masterSessions.get(masterAgentId);
     if (!session) {
@@ -139,9 +139,9 @@ class MasterSessionManager {
         hostname: true,
         displayName: true,
         osType: true,
-        isOnline: true,
+        status: true,
         powerState: true,
-        lastSeen: true,
+        lastSeenAt: true,
       },
     });
 
@@ -149,9 +149,9 @@ class MasterSessionManager {
       agentId: a.id,
       name: a.displayName || a.hostname || 'Unknown',
       osType: a.osType,
-      isOnline: a.isOnline,
+      status: a.status,
       powerState: a.powerState,
-      lastSeen: a.lastSeen,
+      lastSeenAt: a.lastSeenAt,
     }));
   }
 
