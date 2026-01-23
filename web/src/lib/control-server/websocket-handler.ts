@@ -116,6 +116,7 @@ export function handleAgentConnection(
                   );
                   if (updateInfo.hasUpdate) {
                     updateFlag = updateInfo.isForced ? 2 : 1; // 2 = forced, 1 = available
+                    console.log(`[Update] Agent ${agent.hostname || agent.id} (${agent.osType}/${agent.arch} v${agent.agentVersion}) -> update available: ${updateInfo.version}, flag=${updateFlag}`);
                   }
                 }
 
