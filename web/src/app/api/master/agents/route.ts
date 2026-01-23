@@ -29,11 +29,11 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    // Verify agent exists and user has access
+    // Verify agent exists and user owns it
     const agent = await prisma.agent.findUnique({
       where: { id: agentId },
       select: {
-        customerId: true,
+        ownerUserId: true,
         masterModeEnabled: true,
       },
     });
@@ -42,18 +42,9 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
     }
 
-    // Check user has access to this agent's customer
-    if (agent.customerId) {
-      const customerUser = await prisma.customerUser.findFirst({
-        where: {
-          customerId: agent.customerId,
-          userId: session.user.id,
-        },
-      });
-
-      if (!customerUser) {
-        return NextResponse.json({ error: 'Access denied' }, { status: 403 });
-      }
+    // Check user owns this agent
+    if (agent.ownerUserId !== session.user.id) {
+      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
     }
 
     if (!agent.masterModeEnabled) {
