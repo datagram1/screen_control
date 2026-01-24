@@ -1,6 +1,6 @@
 # ScreenControl Version Management
 
-## Current Version: 2.0.5
+## Current Version: 2.0.6
 
 ## Version Files
 
