@@ -9,7 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { prisma } from '@/lib/prisma';
-import { OSType } from '@prisma/client';
+import { OSType, ToolCategory } from '@prisma/client';
 
 export const dynamic = 'force-dynamic';
 
@@ -93,11 +93,13 @@ export async function PUT(
 
     // Build update data
     const updateData: {
-      category?: string;
+      category?: typeof ToolCategory[keyof typeof ToolCategory];
       isEnabled?: boolean;
       sortOrder?: number;
     } = {};
-    if (category !== undefined) updateData.category = category;
+    if (category !== undefined && Object.values(ToolCategory).includes(category)) {
+      updateData.category = category as typeof ToolCategory[keyof typeof ToolCategory];
+    }
     if (isEnabled !== undefined) updateData.isEnabled = isEnabled;
     if (sortOrder !== undefined) updateData.sortOrder = sortOrder;
 
