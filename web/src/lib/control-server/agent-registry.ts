@@ -372,17 +372,28 @@ class LocalAgentRegistry implements IAgentRegistry {
       console.error('[Registry] Failed to create session:', err);
     }
 
+    // Check if capabilities were provided in registration
+    const capabilitiesProvided = Array.isArray(msg.capabilities) && msg.capabilities.length > 0;
+
     console.log(
       `[Registry] Agent registered: ${agent.machineName || agent.machineId} ` +
       `(${agent.osType}) from ${remoteAddress} ` +
       `[${isInternal ? 'INTERNAL' : 'EXTERNAL'}] ` +
-      `[${agent.state}] [${dbResult.isNew ? 'NEW' : 'EXISTING'}]`
+      `[${agent.state}] [${dbResult.isNew ? 'NEW' : 'EXISTING'}]` +
+      `${capabilitiesProvided ? ` [capabilities: ${msg.capabilities.length}]` : ''}`
     );
 
-    // Fetch agent capabilities asynchronously (don't block registration)
-    this.fetchAgentCapabilities(agent.id).catch(err => {
-      console.error(`[Registry] Failed to fetch capabilities for ${agent.machineName}:`, err);
-    });
+    // Store capabilities if provided in registration message (new protocol)
+    if (capabilitiesProvided && agent.dbId) {
+      this.storeAgentCapabilities(agent.dbId, msg.capabilities as string[]).catch(err => {
+        console.error(`[Registry] Failed to store capabilities for ${agent.machineName}:`, err);
+      });
+    } else {
+      // Fallback: Fetch agent capabilities via tools/list (old protocol)
+      this.fetchAgentCapabilities(agent.id).catch(err => {
+        console.error(`[Registry] Failed to fetch capabilities for ${agent.machineName}:`, err);
+      });
+    }
 
     // Apply schedule-based power state (I.2.1)
     this.applyScheduleToAgent(agent).catch(err => {
@@ -537,6 +548,20 @@ class LocalAgentRegistry implements IAgentRegistry {
     await Promise.allSettled(
       agents.map(agent => this.fetchAgentCapabilities(agent.id))
     );
+  }
+
+  /**
+   * Store agent capabilities from registration message
+   * Uses the new protocol where agents send just tool names
+   */
+  private async storeAgentCapabilities(agentDbId: string, capabilities: string[]): Promise<void> {
+    try {
+      const { updateAgentCapabilities } = await import('./tool-service');
+      await updateAgentCapabilities(agentDbId, capabilities);
+      console.log(`[Registry] Stored ${capabilities.length} capabilities for agent ${agentDbId}`);
+    } catch (err) {
+      console.error(`[Registry] Failed to store capabilities:`, err);
+    }
   }
 
   /**

@@ -6,6 +6,7 @@
  */
 
 #include "websocket_client.h"
+#include "command_dispatcher.h"
 #include "../core/logger.h"
 
 #if PLATFORM_WINDOWS
@@ -477,7 +478,12 @@ void WebSocketClient::sendRegistration()
         {"macAddresses", json::array({"windows-agent"})}
     };
 
-    log("-> REGISTER: " + getHostname());
+    // Include lightweight capabilities list (just tool names)
+    // Server uses these to look up full definitions from database
+    auto capabilities = CommandDispatcher::getInstance().getCapabilitiesList();
+    message["capabilities"] = capabilities;
+
+    log("-> REGISTER: " + getHostname() + " (capabilities: " + std::to_string(capabilities.size()) + ")");
 
     sendWebSocketFrame(message.dump());
 }

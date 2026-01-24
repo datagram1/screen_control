@@ -7,6 +7,7 @@
 
 #include "websocket_client.h"
 #include "platform.h"
+#include "command_dispatcher.h"
 #include "../core/config.h"
 #include "../core/logger.h"
 #include "../update/update_manager.h"
@@ -605,7 +606,12 @@ void WebSocketClient::sendRegistration()
     }
     message["hasDisplay"] = hasDisplay;
 
-    log("→ REGISTER: " + getHostname() + " (hasDisplay=" + (hasDisplay ? "true" : "false") + ")");
+    // Include lightweight capabilities list (just tool names)
+    // Server uses these to look up full definitions from database
+    auto capabilities = CommandDispatcher::getInstance().getCapabilitiesList();
+    message["capabilities"] = capabilities;
+
+    log("→ REGISTER: " + getHostname() + " (hasDisplay=" + (hasDisplay ? "true" : "false") + ", capabilities=" + std::to_string(capabilities.size()) + ")");
     sendWebSocketFrame(message.dump());
 }
 

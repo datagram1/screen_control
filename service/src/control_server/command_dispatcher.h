@@ -34,6 +34,10 @@ public:
     // Main dispatch method - called by WebSocket client
     nlohmann::json dispatch(const std::string& method, const nlohmann::json& params);
 
+    // Get lightweight capability list (just tool names, no schemas)
+    // Used for registration message instead of full tools/list
+    std::vector<std::string> getCapabilitiesList();
+
 private:
     // Tool handlers
     nlohmann::json handleFilesystemTool(const std::string& method, const nlohmann::json& params);

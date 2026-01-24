@@ -1126,6 +1126,126 @@ json CommandDispatcher::handleToolsList()
     return {{"tools", tools}};
 }
 
+std::vector<std::string> CommandDispatcher::getCapabilitiesList()
+{
+    // Return list of available tool names (without full definitions)
+    // This is a lightweight alternative to tools/list for capability reporting
+    std::vector<std::string> capabilities;
+
+    // Helper to add capability name
+    auto addCapability = [&capabilities](const std::string& name) {
+        capabilities.push_back(name);
+    };
+
+    // GUI tools
+    addCapability("listApplications");
+    addCapability("focusApplication");
+    addCapability("launchApplication");
+    addCapability("closeApp");
+    addCapability("click");
+    addCapability("click_absolute");
+    addCapability("click_relative");
+    addCapability("click_grid");
+    addCapability("doubleClick");
+    addCapability("clickElement");
+    addCapability("moveMouse");
+    addCapability("scroll");
+    addCapability("scrollMouse");
+    addCapability("drag");
+    addCapability("getClickableElements");
+    addCapability("getUIElements");
+    addCapability("getMousePosition");
+    addCapability("typeText");
+    addCapability("pressKey");
+    addCapability("checkPermissions");
+    addCapability("wait");
+    addCapability("system_info");
+    addCapability("window_list");
+    addCapability("clipboard_read");
+    addCapability("clipboard_write");
+
+#if PLATFORM_WINDOWS
+    addCapability("machine_lock");
+    addCapability("machine_unlock");
+#endif
+
+    // Filesystem tools
+    addCapability("fs_list");
+    addCapability("fs_read");
+    addCapability("fs_read_range");
+    addCapability("fs_write");
+    addCapability("fs_delete");
+    addCapability("fs_move");
+    addCapability("fs_search");
+    addCapability("fs_grep");
+    addCapability("fs_patch");
+
+    // Shell tools
+    addCapability("shell_exec");
+    addCapability("shell_start_session");
+    addCapability("shell_send_input");
+    addCapability("shell_read_output");
+    addCapability("shell_stop_session");
+
+    // Browser tools (only if available)
+    bool browserAvailable = checkBrowserBridgeAvailable();
+    if (browserAvailable) {
+        addCapability("browser_listConnected");
+        addCapability("browser_setDefaultBrowser");
+        addCapability("browser_getTabs");
+        addCapability("browser_getActiveTab");
+        addCapability("browser_focusTab");
+        addCapability("browser_createTab");
+        addCapability("browser_closeTab");
+        addCapability("browser_getPageInfo");
+        addCapability("browser_inspectCurrentPage");
+        addCapability("browser_getInteractiveElements");
+        addCapability("browser_getPageContext");
+        addCapability("browser_clickElement");
+        addCapability("browser_fillElement");
+        addCapability("browser_fillFormField");
+        addCapability("browser_fillWithFallback");
+        addCapability("browser_fillFormNative");
+        addCapability("browser_scrollTo");
+        addCapability("browser_executeScript");
+        addCapability("browser_getFormData");
+        addCapability("browser_setWatchMode");
+        addCapability("browser_getVisibleText");
+        addCapability("browser_searchVisibleText");
+        addCapability("browser_getUIElements");
+        addCapability("browser_waitForSelector");
+        addCapability("browser_waitForPageLoad");
+        addCapability("browser_selectOption");
+        addCapability("browser_isElementVisible");
+        addCapability("browser_getConsoleLogs");
+        addCapability("browser_getNetworkRequests");
+        addCapability("browser_getLocalStorage");
+        addCapability("browser_getCookies");
+        addCapability("browser_clickByText");
+        addCapability("browser_clickMultiple");
+        addCapability("browser_getFormStructure");
+        addCapability("browser_answerQuestions");
+        addCapability("browser_getDropdownOptions");
+        addCapability("browser_openDropdownNative");
+        addCapability("browser_listInteractiveElements");
+        addCapability("browser_clickElementWithDebug");
+        addCapability("browser_findElementWithDebug");
+        addCapability("browser_findTabByUrl");
+        addCapability("browser_navigate");
+        addCapability("browser_screenshot");
+        addCapability("browser_go_back");
+        addCapability("browser_go_forward");
+        addCapability("browser_get_visible_html");
+        addCapability("browser_hover");
+        addCapability("browser_drag");
+        addCapability("browser_press_key");
+        addCapability("browser_upload_file");
+        addCapability("browser_save_as_pdf");
+    }
+
+    return capabilities;
+}
+
 json CommandDispatcher::errorResponse(const std::string& message)
 {
     return {{"error", message}};

@@ -130,6 +130,7 @@ export interface AgentMessage {
   agentVersion?: string;
   fingerprint?: FingerprintData;
   agentSecret?: string;  // API key for re-authentication after token expiry
+  capabilities?: string[]; // Tool names the agent supports (new protocol)
 
   // Response data
   result?: unknown;
