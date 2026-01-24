@@ -1312,6 +1312,27 @@ model TerminalSessionToken {
 }
 
 // ============================================
+// STREAM SESSION TOKENS
+// ============================================
+
+model StreamSessionToken {
+  id              String    @id @default(cuid())
+  token           String    @unique
+  agentId         String
+  userId          String?
+  displayId       Int       @default(0)
+  quality         Int       @default(80)
+  maxFps          Int       @default(30)
+  remoteAddress   String
+  expiresAt       DateTime
+  createdAt       DateTime  @default(now())
+
+  @@index([token])
+  @@index([expiresAt])
+  @@map("stream_session_tokens")
+}
+
+// ============================================
 // MCP TOOL DEFINITIONS
 // ============================================
 

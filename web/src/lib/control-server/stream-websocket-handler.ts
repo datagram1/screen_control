@@ -50,8 +50,8 @@ export function handleStreamConnection(
             return;
           }
 
-          // Validate token
-          const pending = streamSessionManager.validateToken(msg.sessionToken);
+          // Validate token (async - stored in database)
+          const pending = await streamSessionManager.validateToken(msg.sessionToken);
           if (!pending) {
             socket.send(JSON.stringify({
               type: 'error',

@@ -111,8 +111,8 @@ export async function POST(request: NextRequest) {
     headersList.get('x-real-ip') ||
     'unknown';
 
-  // Create session token
-  const result = streamSessionManager.createSessionToken({
+  // Create session token (async - stored in database for cross-process access)
+  const result = await streamSessionManager.createSessionToken({
     agentId: body.agentId,
     userId: user.id,
     displayId: body.displayId ?? 0,

@@ -8,6 +8,7 @@
 import { WebSocket } from 'ws';
 import { StreamSession, ViewerMessage, StreamAgentResponse } from './types';
 import { agentRegistry } from './agent-registry';
+import { prisma } from '../prisma';
 import crypto from 'crypto';
 
 // Session token validity duration (5 minutes)
@@ -31,9 +32,6 @@ class StreamSessionManager {
   // Active streaming sessions
   private sessions: Map<string, StreamSession> = new Map();
 
-  // Session tokens awaiting viewer connection
-  private pendingTokens: Map<string, PendingSession> = new Map();
-
   // Map agent connection ID to stream sessions (for relaying frames)
   private agentToSessions: Map<string, Set<string>> = new Map();
 
@@ -47,16 +45,17 @@ class StreamSessionManager {
 
   /**
    * Create a session token for a viewer to connect
+   * Uses database storage so tokens work across processes (API routes vs WebSocket handler)
    * Called by /api/stream/connect
    */
-  createSessionToken(params: {
+  async createSessionToken(params: {
     agentId: string;
     userId?: string;
     displayId?: number;
     quality?: number;
     maxFps?: number;
     remoteAddress: string;
-  }): { token: string; expiresAt: Date } | { error: string } {
+  }): Promise<{ token: string; expiresAt: Date } | { error: string }> {
     const { agentId, userId, displayId = 0, quality = 80, maxFps = 30, remoteAddress } = params;
 
     // Verify agent exists and is connected
@@ -80,17 +79,22 @@ class StreamSessionManager {
     const token = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + TOKEN_VALIDITY_MS);
 
-    // Store pending session
-    this.pendingTokens.set(token, {
-      token,
-      agentId,
-      userId,
-      displayId,
-      quality,
-      maxFps,
-      createdAt: new Date(),
-      remoteAddress,
+    // Store token in database (works across processes)
+    await prisma.streamSessionToken.create({
+      data: {
+        token,
+        agentId,
+        userId,
+        displayId,
+        quality,
+        maxFps,
+        remoteAddress,
+        expiresAt,
+      },
     });
+
+    // Clean up expired tokens periodically (async, don't wait)
+    this.cleanupExpiredTokens().catch(console.error);
 
     console.log(`[Stream] Created session token for agent ${agent.machineName || agentId}`);
     return { token, expiresAt };
@@ -98,24 +102,38 @@ class StreamSessionManager {
 
   /**
    * Validate and consume a session token
+   * Reads from database so tokens work across processes
    * Returns session info if valid, null if invalid/expired
    */
-  validateToken(token: string): PendingSession | null {
-    const pending = this.pendingTokens.get(token);
-    if (!pending) {
+  async validateToken(token: string): Promise<PendingSession | null> {
+    // Validate token from database
+    const tokenData = await prisma.streamSessionToken.findUnique({
+      where: { token },
+    });
+
+    if (!tokenData) {
       return null;
     }
 
     // Check expiry
-    const age = Date.now() - pending.createdAt.getTime();
-    if (age > TOKEN_VALIDITY_MS) {
-      this.pendingTokens.delete(token);
+    if (new Date() > tokenData.expiresAt) {
+      await prisma.streamSessionToken.delete({ where: { id: tokenData.id } });
       return null;
     }
 
     // Token is valid - consume it (one-time use)
-    this.pendingTokens.delete(token);
-    return pending;
+    await prisma.streamSessionToken.delete({ where: { id: tokenData.id } });
+
+    return {
+      token: tokenData.token,
+      agentId: tokenData.agentId,
+      userId: tokenData.userId ?? undefined,
+      displayId: tokenData.displayId,
+      quality: tokenData.quality,
+      maxFps: tokenData.maxFps,
+      createdAt: tokenData.createdAt,
+      remoteAddress: tokenData.remoteAddress,
+    };
   }
 
   /**
@@ -464,15 +482,14 @@ class StreamSessionManager {
   }
 
   /**
-   * Clean up expired tokens
+   * Clean up expired tokens from database
    */
-  private cleanupExpiredTokens(): void {
-    const now = Date.now();
-    for (const [token, pending] of this.pendingTokens) {
-      if (now - pending.createdAt.getTime() > TOKEN_VALIDITY_MS) {
-        this.pendingTokens.delete(token);
-      }
-    }
+  private async cleanupExpiredTokens(): Promise<void> {
+    await prisma.streamSessionToken.deleteMany({
+      where: {
+        expiresAt: { lt: new Date() },
+      },
+    });
   }
 
   /**

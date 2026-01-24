@@ -108,10 +108,14 @@ class TerminalSessionManager {
     }
 
     // Start shell session on agent first
+    // Use appropriate shell based on OS type
+    const isWindows = connectedAgent.osType === 'WINDOWS';
+    const defaultShell = isWindows ? 'cmd.exe' : '/bin/bash';
+
     let agentSessionId: string;
     try {
       const result = await agentRegistry.sendCommand(connectedAgent.id, 'terminal_start', {
-        shell: '/bin/bash', // Default to bash
+        shell: defaultShell,
         cwd: '',
       }) as { success: boolean; sessionId?: string; error?: string };
 
