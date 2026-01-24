@@ -193,13 +193,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const tools = (toolsResult as { tools?: unknown[] })?.tools || [];
-    if (!Array.isArray(tools) || tools.length === 0) {
+    // Define tool type from agent response
+    interface AgentTool {
+      name: string;
+      description?: string;
+      inputSchema?: object;
+    }
+
+    const rawTools = (toolsResult as { tools?: AgentTool[] })?.tools || [];
+    if (!Array.isArray(rawTools) || rawTools.length === 0) {
       return NextResponse.json(
         { error: 'No tools returned from agent' },
         { status: 400 }
       );
     }
+
+    const tools: AgentTool[] = rawTools;
 
     // Import tools
     const results = {
@@ -292,7 +301,7 @@ export async function POST(request: NextRequest) {
     // Record agent capabilities
     const allToolDefs = await prisma.toolDefinition.findMany({
       where: {
-        name: { in: tools.map((t: { name: string }) => t.name) },
+        name: { in: tools.map(t => t.name) },
       },
     });
 
