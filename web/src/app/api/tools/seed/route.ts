@@ -11,7 +11,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { prisma } from '@/lib/prisma';
 import { ToolCategory, OSType } from '@prisma/client';
-import { agentRegistry } from '@/lib/websocket/registry';
+import { agentRegistry } from '@/lib/control-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -173,9 +173,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get agent connection from registry
-    const connection = agentRegistry.getAgentConnection(agentId);
-    if (!connection) {
+    // Check if agent is connected
+    const connectedAgent = agentRegistry.getAgent(agentId);
+    if (!connectedAgent) {
       return NextResponse.json(
         { error: 'Agent is not connected' },
         { status: 400 }
@@ -183,21 +183,17 @@ export async function POST(request: NextRequest) {
     }
 
     // Request tools/list from agent
-    const toolsResponse = await connection.sendAndWait({
-      jsonrpc: '2.0',
-      id: `seed-tools-${Date.now()}`,
-      method: 'tools/list',
-      params: {},
-    }, 30000);
-
-    if ('error' in toolsResponse) {
+    let toolsResult: unknown;
+    try {
+      toolsResult = await agentRegistry.sendCommand(agentId, 'tools/list', {});
+    } catch (err) {
       return NextResponse.json(
-        { error: `Agent error: ${toolsResponse.error.message}` },
+        { error: `Agent error: ${(err as Error).message}` },
         { status: 500 }
       );
     }
 
-    const tools = toolsResponse.result?.tools || [];
+    const tools = (toolsResult as { tools?: unknown[] })?.tools || [];
     if (!Array.isArray(tools) || tools.length === 0) {
       return NextResponse.json(
         { error: 'No tools returned from agent' },
