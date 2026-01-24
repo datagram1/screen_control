@@ -516,7 +516,6 @@ class StreamSessionManager {
     }
 
     this.sessions.clear();
-    this.pendingTokens.clear();
     this.agentToSessions.clear();
   }
 }
