@@ -244,6 +244,7 @@ model Agent {
   commandLogs       CommandLog[]
   transfersAsSource FileTransfer[] @relation("TransferSource")
   transfersAsDest   FileTransfer[] @relation("TransferDest")
+  toolCapabilities  AgentToolCapability[]
 
   @@unique([customerId, machineId])
   @@index([ownerUserId])
@@ -1308,4 +1309,94 @@ model TerminalSessionToken {
   @@index([token])
   @@index([expiresAt])
   @@map("terminal_session_tokens")
+}
+
+// ============================================
+// MCP TOOL DEFINITIONS
+// ============================================
+
+// Canonical tool definition - the "what" of a tool
+model ToolDefinition {
+  id              String    @id @default(cuid())
+  name            String    @unique  // e.g., "screenshot", "click", "shell_exec"
+  category        ToolCategory
+  isEnabled       Boolean   @default(true)  // Global enable/disable
+  sortOrder       Int       @default(0)     // For UI ordering
+
+  // Timestamps
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // Relations
+  platformVariants  ToolPlatformVariant[]
+  agentCapabilities AgentToolCapability[]
+
+  @@index([category])
+  @@index([isEnabled])
+  @@map("tool_definitions")
+}
+
+// Platform-specific tool variant - the "how" for each OS
+model ToolPlatformVariant {
+  id              String    @id @default(cuid())
+  toolId          String
+  platform        OSType    // WINDOWS, MACOS, LINUX
+
+  // MCP tool definition fields
+  description     String    @db.Text  // Platform-specific description
+  inputSchema     Json      // JSON Schema for tool parameters
+
+  // Platform-specific directives for LLM
+  directives      String?   @db.Text  // Extra instructions for this platform
+
+  // Availability
+  isAvailable     Boolean   @default(true)  // Is this tool available on this platform?
+  requiresDisplay Boolean   @default(false) // Requires GUI (not headless)
+  requiresBrowser Boolean   @default(false) // Requires browser extension
+
+  // Timestamps
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // Relations
+  tool            ToolDefinition @relation(fields: [toolId], references: [id], onDelete: Cascade)
+
+  @@unique([toolId, platform])
+  @@index([platform])
+  @@map("tool_platform_variants")
+}
+
+// Agent's tool capabilities - which tools an agent supports
+model AgentToolCapability {
+  id              String    @id @default(cuid())
+  agentId         String
+  toolId          String
+
+  // Override availability for this specific agent
+  isEnabled       Boolean   @default(true)
+
+  // Timestamps
+  reportedAt      DateTime  @default(now())  // When agent last reported this capability
+
+  // Relations
+  agent           Agent     @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  tool            ToolDefinition @relation(fields: [toolId], references: [id], onDelete: Cascade)
+
+  @@unique([agentId, toolId])
+  @@index([agentId])
+  @@index([toolId])
+  @@map("agent_tool_capabilities")
+}
+
+enum ToolCategory {
+  APPLICATION     // App management (launch, focus, close)
+  SCREEN          // Screenshots, screen capture
+  INPUT           // Mouse, keyboard, clicks
+  FILESYSTEM      // File operations
+  SYSTEM          // System info, processes
+  SHELL           // Command execution
+  CLIPBOARD       // Clipboard operations
+  BROWSER         // Browser automation
+  NETWORK         // Network operations
+  UI_INSPECTION   // UI element inspection
 }
