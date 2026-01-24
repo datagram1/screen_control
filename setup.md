@@ -1,6 +1,6 @@
 # ScreenControl Build Setup
 
-**Current Version**: 2.0.4
+**Current Version**: 2.0.5
 
 This document describes the build infrastructure for ScreenControl across all platforms.
 
@@ -28,8 +28,9 @@ The recommended way to build and deploy is using `deploy.sh`:
 |--------|-------------|
 | `--web-only` | Only build and deploy web application |
 | `--builds-only` | Only build agents (skip web) |
-| `--windows` | Include Windows MSI build |
-| `--all-platforms` | Build all platforms (macOS + Windows) |
+| `--windows` | Include Windows MSI build (requires mingw-w64 + remote Docker) |
+| `--linux` | Include Linux builds (requires Docker Desktop) |
+| `--all-platforms` | Build all platforms (macOS + Windows + Linux) |
 | `--upload` | Upload builds to server via API |
 | `--upload-only` | Only upload existing builds (skip build) |
 | `--skip-tests` | Skip running tests |
@@ -39,7 +40,7 @@ The recommended way to build and deploy is using `deploy.sh`:
 ### Example Workflows
 
 ```bash
-# 1. Release new version
+# 1. Release new version (all platforms)
 ./deploy.sh bump 2.0.5
 ./deploy.sh --all-platforms --upload
 
@@ -49,7 +50,13 @@ The recommended way to build and deploy is using `deploy.sh`:
 # 3. Rebuild Windows and re-upload
 ./deploy.sh --builds-only --windows --upload
 
-# 4. Test build without deploying
+# 4. Rebuild Linux only (x64 + arm64)
+./deploy.sh --builds-only --linux --upload
+
+# 5. Build macOS + Linux (skip Windows)
+./deploy.sh --linux --upload
+
+# 6. Test build without deploying
 ./deploy.sh --builds-only --all-platforms --dry-run
 ```
 
@@ -63,8 +70,21 @@ cd macos
 xcodebuild -scheme ScreenControl -configuration Release
 ```
 
-### Linux
+### Linux (via Docker - recommended)
 ```bash
+# Build both x64 and arm64
+./build-linux.sh both
+
+# Build specific architecture
+./build-linux.sh x64
+./build-linux.sh arm64
+
+# Output: dist/ScreenControl-2.0.5-linux-{arch}.tar.gz
+```
+
+### Linux (native build)
+```bash
+# Only builds for current architecture
 cd service && mkdir -p build && cd build
 cmake .. && make -j$(nproc)
 ```
@@ -258,19 +278,95 @@ For full WiX support, use a Windows CI runner (GitHub Actions windows-latest).
 
 ---
 
+## Linux Build Pipeline
+
+Linux builds use Docker Desktop on Mac to cross-compile for both x64 and arm64 architectures.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Mac (local)                              │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │  Docker Desktop                                         ││
+│  │  (multi-platform: linux/amd64, linux/arm64)             ││
+│  │                                                         ││
+│  │  ┌─────────────────────────────────────────────────┐    ││
+│  │  │  Debian bookworm-slim container                 │    ││
+│  │  │  + build-essential, cmake, libcurl, libssl      │    ││
+│  │  │                                                 │    ││
+│  │  │  1. Build libscreencontrol (SC_BUILD_TESTS=OFF) │    ││
+│  │  │  2. Build ScreenControlService                  │    ││
+│  │  │  3. Extract binary to /output                   │    ││
+│  │  └─────────────────────────────────────────────────┘    ││
+│  └─────────────────────────────────────────────────────────┘│
+│                              │                               │
+│                              ▼                               │
+│            ┌───────────────────────────────┐                 │
+│            │ dist/ScreenControl-2.0.5-     │                 │
+│            │   linux-x64.tar.gz  (728K)    │                 │
+│            │   linux-arm64.tar.gz (666K)   │                 │
+│            └───────────────────────────────┘                 │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Prerequisites
+
+**Docker Desktop** must be running with multi-platform support:
+```bash
+# Verify Docker is running
+docker info
+
+# Verify multi-platform support
+docker buildx ls
+```
+
+### Build Commands
+
+```bash
+# Build both architectures (recommended)
+./build-linux.sh both
+
+# Build specific architecture
+./build-linux.sh x64
+./build-linux.sh arm64
+```
+
+### What the Build Script Does
+
+1. Creates a temporary build context (excludes existing build directories)
+2. Copies `service/` and `libscreencontrol/` source code
+3. Creates a Dockerfile inline with all build dependencies
+4. Builds Docker image for target platform (`linux/amd64` or `linux/arm64`)
+5. Runs container to extract the binary to `dist/linux-{arch}/`
+6. Packages as `ScreenControl-VERSION-linux-{arch}.tar.gz` with correct structure
+
+### Package Structure
+
+The tar.gz must have this structure for the auto-update system:
+```
+ScreenControl-2.0.5-linux-x64.tar.gz
+└── screencontrol/
+    └── ScreenControlService
+```
+
+The update system extracts to a temp directory and copies from `screencontrol/ScreenControlService`.
+
+---
+
 ## Version Management
 
 ### Version Files
 
-When releasing, update ALL these files:
+When releasing, update ALL these files (or use `./deploy.sh bump X.Y.Z`):
 
 | File | Line | Format |
 |------|------|--------|
 | `version.json` | 2 | `"version": "X.Y.Z"` |
 | `service/CMakeLists.txt` | 2 | `VERSION X.Y.Z` |
 | `windows/ScreenControlTray/ScreenControlTray.csproj` | 12 | `<Version>X.Y.Z</Version>` |
+| `macos/ScreenControl/Info.plist` | ~17,19 | `<string>X.Y.Z</string>` (CFBundleShortVersionString, CFBundleVersion) |
 
-**Note:** WXS files now use `$(var.Version)` - version is passed at build time via `-D Version=X.Y.Z.0`
+**Note:** WXS files use `$(var.Version)` - version is passed at build time via `-D Version=X.Y.Z.0`
 
 ### Automated Version Update
 
@@ -309,6 +405,8 @@ build-windows.sh reads version
 | Image | Host | Purpose |
 |-------|------|---------|
 | `wixl-builder:latest` | 192.168.10.31 | Fedora + msitools for MSI packaging |
+| `screencontrol-linux-builder-x64` | Local (Docker Desktop) | Debian + build tools for Linux x64 |
+| `screencontrol-linux-builder-arm64` | Local (Docker Desktop) | Debian + build tools for Linux arm64 |
 
 ---
 
@@ -342,6 +440,31 @@ FROM fedora:39
 RUN dnf install -y msitools && dnf clean all
 WORKDIR /build
 EOF"
+```
+
+### Docker not running (Linux builds)
+```bash
+# Start Docker Desktop (macOS)
+open -a Docker
+
+# Wait for Docker to start
+docker info
+```
+
+### Linux build fails with CMakeCache error
+```bash
+# This happens when build directories are copied with stale cache
+# The build script should exclude build dirs, but if needed:
+rm -rf libscreencontrol/build* service/build*
+./build-linux.sh both
+```
+
+### Linux build fails with test linking errors
+```bash
+# Tests require X11/Pipewire which aren't available in headless container
+# The build script should use -DSC_BUILD_TESTS=OFF
+# If manually building, add this flag:
+cmake .. -DCMAKE_BUILD_TYPE=Release -DSC_BUILD_TESTS=OFF
 ```
 
 ### Version mismatch in MSI
@@ -469,3 +592,192 @@ openssl pkcs12 -export -out screencontrol-test.pfx -inkey key.pem -in cert.pem -
 ```bash
 CODESIGN_ENABLED=false ./windows-build-package/build-windows.sh
 ```
+
+---
+
+## MCP Integration (AI/LLM Access)
+
+ScreenControl provides MCP (Model Context Protocol) integration allowing AI assistants like Claude Code to control machines remotely.
+
+### Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         Claude Code (enterprise.local)                       │
+│                                                                             │
+│  .mcp.json config:                                                          │
+│  ┌───────────────────────┐    ┌───────────────────────────────────────────┐│
+│  │ Local stdio MCP       │    │ Remote SSE MCP                            ││
+│  │ (screen_control)      │    │ (screencontrol.knws.co.uk)                ││
+│  │                       │    │                                           ││
+│  │ Controls THIS machine │    │ Proxies to connected agents:              ││
+│  │ - screenshot          │    │ - mail__screenshot                        ││
+│  │ - click               │    │ - ubuntu__shell_exec                      ││
+│  │ - typeText            │    │ - webserver__fs_read                      ││
+│  └───────────────────────┘    └───────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────────────────────┘
+                                         │
+                                         │ SSE + JSON-RPC
+                                         ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    ScreenControl Web (192.168.10.10)                        │
+│                                                                             │
+│  /api/mcp/sse - SSE endpoint (connection + events)                          │
+│  /api/mcp/messages - JSON-RPC message handler                               │
+│                                                                             │
+│  AgentRegistry:                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────────┐│
+│  │ Aggregates tools from all connected agents with prefixes:               ││
+│  │ - mail__* (39 tools) → Agent: mail.local                                ││
+│  │ - ubuntu__* (39 tools) → Agent: ubuntu-server                           ││
+│  │ - webserver__* (30 tools) → Agent: web.knws.co.uk                       ││
+│  └─────────────────────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────────────────────┘
+                                         │
+                                         │ WebSocket
+                                         ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         Connected Agents                                    │
+│                                                                             │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                         │
+│  │ mail        │  │ ubuntu      │  │ webserver   │                         │
+│  │ (macOS)     │  │ (Linux)     │  │ (Linux)     │                         │
+│  │ 39 tools    │  │ 39 tools    │  │ 30 tools    │                         │
+│  └─────────────┘  └─────────────┘  └─────────────┘                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### MCP Server Types
+
+#### 1. Local stdio MCP Server
+
+The local MCP server runs as a subprocess and controls the machine where Claude Code is running.
+
+**Installation:** The `screen_control` MCP server is built into the ScreenControl macOS app.
+
+**Configuration** (`.mcp.json` in project root):
+```json
+{
+  "mcpServers": {
+    "screen_control": {
+      "command": "/path/to/ScreenControl.app/Contents/MacOS/mcp-server",
+      "args": []
+    }
+  }
+}
+```
+
+**Available tools:** `screenshot`, `click`, `typeText`, `pressKey`, `listApplications`, `focusApplication`, `shell_exec`, `fs_read`, `fs_write`, etc.
+
+#### 2. Remote SSE MCP Server
+
+The remote SSE MCP server connects to the ScreenControl web dashboard and provides access to all connected agents.
+
+**Configuration** (`.mcp.json` or `~/.claude/settings.json`):
+```json
+{
+  "mcpServers": {
+    "screencontrol": {
+      "url": "https://screencontrol.knws.co.uk/mcp/<connection-id>",
+      "transport": "sse",
+      "headers": {
+        "Authorization": "Bearer <access-token>"
+      }
+    }
+  }
+}
+```
+
+**How to get credentials:**
+1. Log in to https://screencontrol.knws.co.uk/dashboard
+2. Go to Connections → Create AI Connection
+3. Copy the MCP URL and access token
+
+### MCP API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/mcp/sse` | GET | SSE connection for events (agents list, status) |
+| `/api/mcp/messages` | POST | JSON-RPC message handler for tool calls |
+| `/mcp/<connection-id>` | GET/POST | Combined endpoint for Claude Code SSE transport |
+
+### Tool Naming Convention
+
+When multiple agents are connected, tools are prefixed with the agent's machine name:
+
+```
+<agent-name>__<tool-name>
+```
+
+Examples:
+- `mail__screenshot` - Take screenshot on mail server
+- `ubuntu__shell_exec` - Execute shell command on ubuntu server
+- `webserver__fs_read` - Read file on webserver
+
+### Querying Connected Agents
+
+**Via curl:**
+```bash
+curl -s -X POST "https://screencontrol.knws.co.uk/api/mcp/messages" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | \
+  jq '.result.tools | group_by(.agentName) | map({agent: .[0].agentName, tools: length})'
+```
+
+**Response:**
+```json
+[
+  {"agent": "mail", "tools": 39},
+  {"agent": "ubuntu", "tools": 39},
+  {"agent": "webserver", "tools": 30}
+]
+```
+
+### Multi-Agent Usage in Claude Code
+
+Once configured, Claude Code can access remote agents through the SSE MCP server:
+
+```
+User: Take a screenshot of the mail server
+
+Claude: [Calls mail__screenshot tool via screencontrol MCP]
+```
+
+The tool call is:
+1. Received by the web dashboard MCP endpoint
+2. Routed to the correct agent based on the tool prefix
+3. Forwarded to the agent via WebSocket
+4. Result returned through the same chain
+
+### Current Limitations
+
+1. **Agent must be online** - Tools only appear when agents are connected
+2. **Tool discovery** - Claude Code discovers tools at startup; restart needed if agents connect later
+3. **No resource aggregation yet** - MCP resources from agents aren't aggregated
+4. **SSE transport** - Some MCP clients may not support SSE transport
+
+### Troubleshooting MCP
+
+**Check if MCP server is responding:**
+```bash
+curl -s -X POST "https://screencontrol.knws.co.uk/api/mcp/messages" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"ping","params":{}}'
+```
+
+**List available tools:**
+```bash
+curl -s -X POST "https://screencontrol.knws.co.uk/api/mcp/messages" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | jq '.result.tools | length'
+```
+
+**Check Claude Code MCP status:**
+```
+/mcp
+```
+
+**Restart Claude Code** after changing `.mcp.json` - MCP servers are loaded at startup.

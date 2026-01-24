@@ -660,6 +660,51 @@ class LocalAgentRegistry implements IAgentRegistry {
   }
 
   /**
+   * Get aggregated tools from database definitions (new architecture)
+   * Uses server-side tool definitions instead of querying agents
+   */
+  async getAggregatedToolsFromDB(): Promise<Array<MCPTool & { agentId: string; agentName: string }>> {
+    const { getToolsForAgent } = await import('./tool-service');
+    const aggregatedTools: Array<MCPTool & { agentId: string; agentName: string }> = [];
+
+    for (const agent of this.agents.values()) {
+      if (agent.state !== 'ACTIVE' || !agent.dbId) continue;
+
+      const agentName = agent.machineName || agent.machineId || agent.id;
+
+      try {
+        const tools = await getToolsForAgent(agent.dbId);
+
+        for (const tool of tools) {
+          aggregatedTools.push({
+            name: `${agentName}__${tool.name}`,
+            description: `[${agentName}] ${tool.description || ''}`,
+            inputSchema: tool.inputSchema,
+            agentId: agent.id,
+            agentName,
+          });
+        }
+      } catch (err) {
+        console.error(`[Registry] Failed to get DB tools for ${agentName}:`, err);
+        // Fallback to cached tools
+        if (agent.tools) {
+          for (const tool of agent.tools) {
+            aggregatedTools.push({
+              ...tool,
+              name: `${agentName}__${tool.name}`,
+              description: `[${agentName}] ${tool.description || ''}`,
+              agentId: agent.id,
+              agentName,
+            });
+          }
+        }
+      }
+    }
+
+    return aggregatedTools;
+  }
+
+  /**
    * Get aggregated resources from all connected agents
    */
   getAggregatedResources(): Array<MCPResource & { agentId: string; agentName: string }> {

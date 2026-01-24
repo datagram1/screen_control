@@ -21,9 +21,11 @@ ScreenControl is a remote desktop management system with:
 ┌─────────────────────────────────────────────────────────────┐
 │                   Managed Machines                          │
 │                                                             │
-│  Windows:                    macOS:                         │
-│  ├── ScreenControlService    └── ScreenControl.app          │
-│  └── ScreenControlTray                                      │
+│  Windows:              macOS:              Linux:           │
+│  ├── ScreenControl     └── ScreenControl   └── ScreenControl│
+│  │   Service.exe          .app (menu bar)     Service       │
+│  └── ScreenControl                            (headless)    │
+│      Tray.exe                                               │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -36,6 +38,8 @@ ScreenControl is a remote desktop management system with:
 | `service/src/update/` | Auto-update system |
 | `service/src/platform/windows/` | Windows-specific code |
 | `service/src/platform/macos/` | macOS-specific code |
+| `service/src/platform/linux/` | Linux-specific code |
+| `libscreencontrol/` | Shared C library for screen capture/input |
 | `windows/ScreenControlTray/` | C# Windows tray app (.NET 8) |
 | `windows-build-package/` | Windows MSI build scripts |
 | `macos/` | Xcode project for macOS app |
@@ -57,6 +61,12 @@ See `setup.md` for detailed build instructions.
 # Build Windows only (from Mac via Docker)
 ./deploy.sh --builds-only --windows
 
+# Build Linux only (via Docker Desktop)
+./deploy.sh --builds-only --linux --upload
+
+# Build macOS + Linux (skip Windows)
+./deploy.sh --linux --upload
+
 # Upload existing builds without rebuilding
 ./deploy.sh --upload-only
 
@@ -69,13 +79,18 @@ See `setup.md` for detailed build instructions.
 
 ```bash
 # Windows MSI (from Mac via Docker)
-cd windows-build-package && ./build-windows.sh 2.0.4
-# Output: installer/output/ScreenControl-2.0.4-x64.msi
+cd windows-build-package && ./build-windows.sh 2.0.5
+# Output: installer/output/ScreenControl-2.0.5-x64.msi
 
 # macOS
 cd macos && xcodebuild -scheme ScreenControl -configuration Release
 
-# Linux service
+# Linux service (via Docker - builds x64 and arm64)
+./build-linux.sh both
+# Output: dist/ScreenControl-2.0.5-linux-x64.tar.gz
+#         dist/ScreenControl-2.0.5-linux-arm64.tar.gz
+
+# Linux service (native build - current architecture only)
 cd service && mkdir build && cd build && cmake .. && make -j$(nproc)
 ```
 
@@ -83,10 +98,11 @@ cd service && mkdir build && cd build && cmake .. && make -j$(nproc)
 
 **Source of truth:** `version.json`
 
-**Files to update when releasing:**
+**Files to update when releasing** (use `./deploy.sh bump X.Y.Z`):
 - `version.json`
 - `service/CMakeLists.txt` (line 2)
 - `windows/ScreenControlTray/ScreenControlTray.csproj` (line 12)
+- `macos/ScreenControl/Info.plist` (CFBundleShortVersionString, CFBundleVersion)
 
 WXS files use `$(var.Version)` - version passed at build time.
 
@@ -98,6 +114,26 @@ The Windows build uses a hybrid approach from Mac:
 3. **MSI Packaging** - Built on remote x86 Docker host (192.168.10.31) using wixl/msitools
 
 See `setup.md` for full pipeline documentation.
+
+## Linux Build Pipeline
+
+Linux builds use Docker Desktop on Mac to cross-compile for both x64 and arm64:
+
+1. **Docker multi-platform** - Uses `--platform linux/amd64` and `linux/arm64`
+2. **Debian bookworm** - Base image with build-essential, cmake, libcurl, libssl
+3. **libscreencontrol** - Built first (with `-DSC_BUILD_TESTS=OFF` for headless)
+4. **Service binary** - Extracted and packaged as tar.gz
+
+```bash
+# Build both architectures
+./build-linux.sh both
+
+# Build single architecture
+./build-linux.sh x64
+./build-linux.sh arm64
+```
+
+**Requirements:** Docker Desktop running with multi-platform support enabled.
 
 ## Infrastructure
 
@@ -148,8 +184,16 @@ See `setup.md` for full pipeline documentation.
 ### Build Windows MSI
 ```bash
 cd windows-build-package
-./build-windows.sh 2.0.4
-# Output: installer/output/ScreenControl-2.0.4-x64.msi
+./build-windows.sh 2.0.5
+# Output: installer/output/ScreenControl-2.0.5-x64.msi
+```
+
+### Build Linux (Docker)
+```bash
+# Requires Docker Desktop running
+./build-linux.sh both
+# Output: dist/ScreenControl-2.0.5-linux-x64.tar.gz
+#         dist/ScreenControl-2.0.5-linux-arm64.tar.gz
 ```
 
 ### Bump Version

@@ -1,0 +1,29 @@
+# Linux build container for ScreenControl Service
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    ninja-build \
+    git \
+    libcurl4-openssl-dev \
+    libssl-dev \
+    pkg-config \
+    libzstd-dev \
+    libjpeg-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Copy source
+COPY . /build/service/
+COPY ../libscreencontrol /build/libscreencontrol/
+
+WORKDIR /build/service
+
+# Build
+RUN mkdir -p build && cd build && \
+    cmake .. -DCMAKE_BUILD_TYPE=Release -G Ninja && \
+    ninja
+
+# Output will be in /build/service/build/bin/ScreenControlService

@@ -257,15 +257,13 @@ void UpdateManager::downloadUpdate()
         return;
     }
 
-    // Start download in background
-    if (m_workerThread.joinable())
-    {
-        m_workerThread.join();
-    }
-
     m_cancelDownload = false;
 
-    m_workerThread = std::thread([this]() {
+    // Check if we're being called from within the worker thread (e.g., auto-download from checkForUpdate)
+    // If so, just continue in the current thread to avoid deadlock
+    bool runInCurrentThread = (std::this_thread::get_id() == m_workerThread.get_id());
+
+    auto downloadWork = [this]() {
         m_status = UpdateStatus::DOWNLOADING;
         m_downloaded = 0;
         m_totalSize = m_updateInfo.size;
@@ -339,7 +337,22 @@ void UpdateManager::downloadUpdate()
         {
             applyUpdate();
         }
-    });
+    };
+
+    if (runInCurrentThread)
+    {
+        // Already in worker thread, run directly
+        downloadWork();
+    }
+    else
+    {
+        // Start download in new background thread
+        if (m_workerThread.joinable())
+        {
+            m_workerThread.join();
+        }
+        m_workerThread = std::thread(downloadWork);
+    }
 }
 
 void UpdateManager::applyUpdate()
