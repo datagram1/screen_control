@@ -11,7 +11,11 @@ import { OSType, ToolCategory } from '@prisma/client';
 export interface MCPToolDefinition {
   name: string;
   description: string;
-  inputSchema: Record<string, unknown>;
+  inputSchema: {
+    type: 'object';
+    properties?: Record<string, unknown>;
+    required?: string[];
+  };
 }
 
 export interface AggregatedTool extends MCPToolDefinition {
@@ -71,7 +75,7 @@ export async function getToolsForAgent(
       tools.push({
         name: capability.tool.name,
         description: variant.description,
-        inputSchema: variant.inputSchema as Record<string, unknown>,
+        inputSchema: variant.inputSchema as MCPToolDefinition['inputSchema'],
       });
     }
   } else {
@@ -111,7 +115,7 @@ export async function getToolsForAgent(
       tools.push({
         name: tool.name,
         description: variant.description,
-        inputSchema: variant.inputSchema as Record<string, unknown>,
+        inputSchema: variant.inputSchema as MCPToolDefinition['inputSchema'],
       });
     }
   }
@@ -238,7 +242,7 @@ export async function getToolsByCategory(): Promise<
     result[tool.category].push({
       name: tool.name,
       description: variant.description,
-      inputSchema: variant.inputSchema as Record<string, unknown>,
+      inputSchema: variant.inputSchema as MCPToolDefinition['inputSchema'],
     });
   }
 
