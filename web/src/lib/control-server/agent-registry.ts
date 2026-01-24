@@ -373,19 +373,20 @@ class LocalAgentRegistry implements IAgentRegistry {
     }
 
     // Check if capabilities were provided in registration
-    const capabilitiesProvided = Array.isArray(msg.capabilities) && msg.capabilities.length > 0;
+    const capabilities = msg.capabilities;
+    const capabilitiesProvided = Array.isArray(capabilities) && capabilities.length > 0;
 
     console.log(
       `[Registry] Agent registered: ${agent.machineName || agent.machineId} ` +
       `(${agent.osType}) from ${remoteAddress} ` +
       `[${isInternal ? 'INTERNAL' : 'EXTERNAL'}] ` +
       `[${agent.state}] [${dbResult.isNew ? 'NEW' : 'EXISTING'}]` +
-      `${capabilitiesProvided ? ` [capabilities: ${msg.capabilities.length}]` : ''}`
+      `${capabilitiesProvided ? ` [capabilities: ${capabilities.length}]` : ''}`
     );
 
     // Store capabilities if provided in registration message (new protocol)
     if (capabilitiesProvided && agent.dbId) {
-      this.storeAgentCapabilities(agent.dbId, msg.capabilities as string[]).catch(err => {
+      this.storeAgentCapabilities(agent.dbId, capabilities).catch(err => {
         console.error(`[Registry] Failed to store capabilities for ${agent.machineName}:`, err);
       });
     } else {
